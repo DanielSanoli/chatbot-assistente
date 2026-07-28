@@ -38,6 +38,7 @@ export const HorarioSchema = z
 export const ServicoSchema = z.object({
   id: z.string().min(1),
   nome: z.string().min(1),
+  aliases: z.array(z.string().min(1)).default([]),
   duracao_min: z
     .number({
       required_error: "duracao_min é obrigatório",
@@ -93,6 +94,7 @@ export const LocalSchema = z.object({
   cep: z.string().min(1).optional(),
   complemento: z.string().min(1).optional(),
   referencia: z.string().min(1).optional(),
+  estacionamento: z.string().min(1).optional(),
 });
 
 export const PagamentoSchema = z.object({

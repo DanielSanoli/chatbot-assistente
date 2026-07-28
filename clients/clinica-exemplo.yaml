@@ -31,8 +31,9 @@ profissionais:
   - id: dra-ana
     nome: Dra. Ana Silva
     servicos:
+      - limpeza
       - consulta
-      - retorno
+      - canal
     calendario_id: "${GOOGLE_CALENDAR_ANA}"
   - id: dr-bruno
     nome: Dr. Bruno Costa
@@ -42,16 +43,28 @@ profissionais:
     calendario_id: "${GOOGLE_CALENDAR_BRUNO}"
 
 servicos:
+  - id: limpeza
+    nome: Limpeza dental
+    aliases:
+      - tártaro
+      - tartaro
+      - profilaxia
+    duracao_min: 45
+    preco: 180
+  - id: canal
+    nome: Tratamento de canal
+    aliases:
+      - endodontia
+    duracao_min: 90
+    preco: null
   - id: consulta
     nome: Consulta inicial
+    aliases: []
     duracao_min: 40
     preco: 280
-  - id: retorno
-    nome: Retorno
-    duracao_min: 20
-    preco: null
   - id: avaliacao
     nome: Avaliação completa
+    aliases: []
     duracao_min: 60
     preco: 450
 
@@ -63,13 +76,14 @@ local:
   cep: "01415-000"
   complemento: Sala 4
   referencia: Próximo ao metrô Consolação
+  estacionamento: Há estacionamento conveniado na Rua das Flores, 150. As primeiras 2 horas são cortesia para pacientes.
 
 pagamento:
   formas:
     - pix
     - cartao
     - dinheiro
-  instrucoes: Preferência por PIX. Cartão e dinheiro aceitos no local.
+  instrucoes: Preferência por PIX. Cartão e dinheiro aceitos no local. Não trabalhamos com convênio nesta unidade.
 
 faq:
   - pergunta: Como remarcar uma consulta?
@@ -88,6 +102,7 @@ tom_de_voz:
 handoff:
   gatilhos:
     - preco_nao_informado
+    - servico_inexistente
     - emergencia
     - reclamacao
   contato: "${HANDOFF_WHATSAPP}"

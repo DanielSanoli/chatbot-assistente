@@ -5,3 +5,8 @@ export {
   countMessagesByWaMessageId,
   type MessageDirection,
 } from "./messages.js";
+export {
+  getConversationWindow,
+  clearConversationMessages,
+  type HistoryMessage,
+} from "./history.js";

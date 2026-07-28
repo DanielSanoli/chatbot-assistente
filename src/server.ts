@@ -7,6 +7,7 @@ import { createWhatsappChannel } from "./channel/index.js";
 import { createGoogleCalendarClient } from "./calendar/index.js";
 import { createBrain } from "./brain/index.js";
 import { openStore, logEvent } from "./store/index.js";
+import { maskPhone } from "./channel/mask.js";
 
 function loadDotEnv(filePath = ".env"): void {
   const absolute = resolve(filePath);
@@ -66,6 +67,7 @@ async function main(): Promise<void> {
 
   const waVerifyToken = requireEnv("WA_VERIFY_TOKEN");
   const waAppSecret = requireEnv("WA_APP_SECRET");
+  const anthropicKey = requireEnv("ANTHROPIC_API_KEY");
 
   const store = openStore(sqlitePath);
   logEvent(store, "server.boot", {
@@ -74,6 +76,11 @@ async function main(): Promise<void> {
   });
 
   const app = Fastify({ logger: true });
+
+  const brain = createBrain({
+    store,
+    apiKey: anthropicKey,
+  });
 
   const whatsapp = createWhatsappChannel({
     store,
@@ -86,11 +93,29 @@ async function main(): Promise<void> {
       warn: (obj, msg) => app.log.warn(obj, msg),
       error: (obj, msg) => app.log.error(obj, msg),
     },
+    onTextMessage: async ({ waId, text }) => {
+      try {
+        const turn = await brain.handleText(waId, text);
+        await whatsapp.sendText(waId, turn.reply);
+      } catch (err) {
+        app.log.error(
+          {
+            wa_id: maskPhone(waId),
+            err: err instanceof Error ? err.message : String(err),
+          },
+          "brain handleText failed",
+        );
+        logEvent(store, "brain.error", {
+          wa_id_masked: maskPhone(waId),
+          error: err instanceof Error ? err.message : String(err),
+        });
+        await whatsapp.sendText(waId, config.handoff.mensagem);
+      }
+    },
   });
   whatsapp.registerRoutes(app);
 
   createGoogleCalendarClient();
-  createBrain();
 
   app.get("/health", async () => ({
     ok: true,

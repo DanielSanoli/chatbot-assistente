@@ -7,7 +7,7 @@ whatsapp:
   phone_number_id: "${WHATSAPP_PHONE_NUMBER_ID}"
   access_token: "${WHATSAPP_ACCESS_TOKEN}"
   verify_token: "${WHATSAPP_VERIFY_TOKEN}"
-  webhook_path: /webhook/whatsapp
+  webhook_path: /webhook
 
 google_calendar:
   calendar_id: "${GOOGLE_CALENDAR_ID}"

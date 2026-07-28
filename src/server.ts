@@ -32,6 +32,15 @@ function loadDotEnv(filePath = ".env"): void {
   }
 }
 
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    console.error(`Falha na subida: variável de ambiente obrigatória ausente: ${name}`);
+    process.exit(1);
+  }
+  return value;
+}
+
 async function main(): Promise<void> {
   loadDotEnv();
 
@@ -55,17 +64,33 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const waVerifyToken = requireEnv("WA_VERIFY_TOKEN");
+  const waAppSecret = requireEnv("WA_APP_SECRET");
+
   const store = openStore(sqlitePath);
   logEvent(store, "server.boot", {
     cliente_id: config.cliente.id,
     config_path: configPath,
   });
 
-  createWhatsappChannel();
+  const app = Fastify({ logger: true });
+
+  const whatsapp = createWhatsappChannel({
+    store,
+    phoneNumberId: config.whatsapp.phone_number_id,
+    accessToken: config.whatsapp.access_token,
+    verifyToken: waVerifyToken,
+    appSecret: waAppSecret,
+    logger: {
+      info: (obj, msg) => app.log.info(obj, msg),
+      warn: (obj, msg) => app.log.warn(obj, msg),
+      error: (obj, msg) => app.log.error(obj, msg),
+    },
+  });
+  whatsapp.registerRoutes(app);
+
   createGoogleCalendarClient();
   createBrain();
-
-  const app = Fastify({ logger: true });
 
   app.get("/health", async () => ({
     ok: true,
@@ -84,7 +109,12 @@ async function main(): Promise<void> {
 
   await app.listen({ host, port });
   app.log.info(
-    `Cliente "${config.cliente.nome}" carregado de ${configPath} (${config.servicos.length} serviços)`,
+    {
+      cliente: config.cliente.id,
+      webhook: "/webhook",
+      servicos: config.servicos.length,
+    },
+    "servidor pronto",
   );
 }
 

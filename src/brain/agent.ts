@@ -385,6 +385,7 @@ export function createAgent(deps: AgentDeps) {
     if (respostaSemFonte) {
       logEvent(deps.store, "resposta_sem_fonte", {
         wa_id_masked: maskPhone(waId),
+        user_text: userText.slice(0, 280),
         reply_length: finalText.length,
       });
     }

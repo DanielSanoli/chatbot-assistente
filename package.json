@@ -11,7 +11,9 @@
     "start": "tsx src/server.ts",
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "conversas": "tsx src/reports/cli-conversas.ts",
+    "relatorio": "tsx src/reports/cli-relatorio.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

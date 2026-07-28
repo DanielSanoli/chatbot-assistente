@@ -9,3 +9,5 @@ data/
 coverage/
 .DS_Store
 *.log
+reports/*
+!reports/.gitkeep

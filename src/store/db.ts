@@ -6,7 +6,8 @@ const MIGRATION_V1 = `
 CREATE TABLE IF NOT EXISTS conversations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   wa_id TEXT NOT NULL UNIQUE,
-  estado TEXT NOT NULL DEFAULT 'novo',
+  estado TEXT NOT NULL DEFAULT 'LIVRE',
+  estado_payload TEXT NOT NULL DEFAULT '{}',
   atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -31,6 +32,25 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation
 CREATE INDEX IF NOT EXISTS idx_events_tipo ON events(tipo);
 `;
 
+function migrateConversations(db: Database.Database): void {
+  const cols = db
+    .prepare(`PRAGMA table_info(conversations)`)
+    .all() as Array<{ name: string }>;
+  const names = new Set(cols.map((c) => c.name));
+
+  if (!names.has("estado_payload")) {
+    db.exec(
+      `ALTER TABLE conversations ADD COLUMN estado_payload TEXT NOT NULL DEFAULT '{}'`,
+    );
+  }
+
+  db.exec(
+    `UPDATE conversations
+     SET estado = 'LIVRE'
+     WHERE estado IN ('novo', 'NEW', '') OR estado IS NULL`,
+  );
+}
+
 export type Store = {
   db: Database.Database;
   close: () => void;
@@ -44,6 +64,7 @@ export function openStore(sqlitePath: string): Store {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(MIGRATION_V1);
+  migrateConversations(db);
 
   return {
     db,

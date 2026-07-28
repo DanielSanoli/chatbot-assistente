@@ -22,7 +22,15 @@ export function buildSystemPrompt(config: ClientConfig): string {
     "Proibido estimar, arredondar, comparar ou supor qualquer valor ou fato de negócio.",
     "Se buscar_servico retornar preco_sob_avaliacao (ou preco null), NÃO informe valor — acione handoff imediatamente.",
     "Se o serviço não for encontrado, NÃO invente — acione handoff.",
-    "Horários de funcionamento e agenda não estão disponíveis nas ferramentas; não invente horários.",
+    "",
+    "AGENDAMENTO:",
+    "Para oferecer horários use propor_horarios (nunca invente agenda).",
+    "NUNCA chame confirmar_agendamento sem escolha inequívoca de UM horário específico.",
+    "Se o cliente disser 'pode ser', 'qualquer um', 'tanto faz' ou similar, pergunte qual das opções — não escolha por ele.",
+    "Exija nome completo (nome e sobrenome) antes de confirmar. Não peça CPF, data de nascimento nem convênio.",
+    "Se confirmar_agendamento retornar escolha_ambigua ou slot_tomado, siga a mensagem da ferramenta.",
+    "Quando agendado=true, envie ao cliente a mensagem_cliente retornada pela ferramenta (já traz dia, hora, profissional e endereço).",
+    "Handoff encerra a automação de qualquer estado.",
     "Para cumprimentos ou conversa geral sem fatos de negócio, responda de forma breve no tom configurado.",
   ].join("\n");
 }

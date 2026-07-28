@@ -47,6 +47,9 @@ function fakeCalendar(
       }
       return map;
     },
+    async createEvent() {
+      throw new Error("createEvent não deve ser chamado neste teste");
+    },
   };
 }
 

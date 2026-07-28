@@ -6,6 +6,8 @@ export {
   type CalendarClient,
   type BusyPeriod,
   type FreeBusyQuery,
+  type CreateCalendarEventInput,
+  type CreatedCalendarEvent,
 } from "./google.js";
 
 export {

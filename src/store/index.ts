@@ -10,3 +10,14 @@ export {
   clearConversationMessages,
   type HistoryMessage,
 } from "./history.js";
+export {
+  ensureConversation,
+  getConversation,
+  setConversationState,
+  patchConversationPayload,
+  CONVERSATION_STATES,
+  type ConversationState,
+  type ConversationRow,
+  type EstadoPayload,
+  type ProposedSlot,
+} from "./conversations.js";

@@ -23,10 +23,27 @@ export type FreeBusyQuery = {
   timeZone: string;
 };
 
+export type CreateCalendarEventInput = {
+  calendarId: string;
+  title: string;
+  inicio: DateTime;
+  fim: DateTime;
+  timeZone: string;
+  description?: string;
+};
+
+export type CreatedCalendarEvent = {
+  id: string;
+  htmlLink?: string;
+};
+
 export type CalendarClient = {
   name: "google_calendar";
   ready: boolean;
   queryBusy: (query: FreeBusyQuery) => Promise<Map<string, BusyPeriod[]>>;
+  createEvent: (
+    input: CreateCalendarEventInput,
+  ) => Promise<CreatedCalendarEvent>;
 };
 
 export type GoogleCalendarDeps = {
@@ -35,6 +52,9 @@ export type GoogleCalendarDeps = {
   fetchFreeBusy?: (
     query: FreeBusyQuery,
   ) => Promise<calendar_v3.Schema$FreeBusyResponse>;
+  insertEvent?: (
+    input: CreateCalendarEventInput,
+  ) => Promise<CreatedCalendarEvent>;
 };
 
 function parseServiceAccountJson(raw: string): {
@@ -63,6 +83,21 @@ function parseServiceAccountJson(raw: string): {
   }
 
   return parsed as { client_email: string; private_key: string };
+}
+
+function getJwtAuth(serviceAccountJson?: string) {
+  const raw = serviceAccountJson ?? process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    throw new CalendarUnavailable(
+      "GOOGLE_SERVICE_ACCOUNT_JSON não configurada",
+    );
+  }
+  const credentials = parseServiceAccountJson(raw);
+  return new google.auth.JWT({
+    email: credentials.client_email,
+    key: credentials.private_key,
+    scopes: ["https://www.googleapis.com/auth/calendar"],
+  });
 }
 
 /**
@@ -141,21 +176,7 @@ export function createGoogleCalendarClient(
   const fetchFreeBusy =
     deps.fetchFreeBusy ??
     (async (query: FreeBusyQuery) => {
-      const raw =
-        deps.serviceAccountJson ?? process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-      if (!raw) {
-        throw new CalendarUnavailable(
-          "GOOGLE_SERVICE_ACCOUNT_JSON não configurada",
-        );
-      }
-
-      const credentials = parseServiceAccountJson(raw);
-      const auth = new google.auth.JWT({
-        email: credentials.client_email,
-        key: credentials.private_key,
-        scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
-      });
-
+      const auth = getJwtAuth(deps.serviceAccountJson);
       const calendar = google.calendar({ version: "v3", auth });
 
       try {
@@ -178,6 +199,47 @@ export function createGoogleCalendarClient(
       }
     });
 
+  const insertEvent =
+    deps.insertEvent ??
+    (async (input: CreateCalendarEventInput) => {
+      const auth = getJwtAuth(deps.serviceAccountJson);
+      const calendar = google.calendar({ version: "v3", auth });
+
+      try {
+        const res = await calendar.events.insert({
+          calendarId: input.calendarId,
+          requestBody: {
+            summary: input.title,
+            description: input.description,
+            start: {
+              dateTime: input.inicio.toUTC().toISO() ?? undefined,
+              timeZone: input.timeZone,
+            },
+            end: {
+              dateTime: input.fim.toUTC().toISO() ?? undefined,
+              timeZone: input.timeZone,
+            },
+          },
+        });
+
+        const id = res.data.id;
+        if (!id) {
+          throw new CalendarUnavailable(
+            "Google Calendar não retornou id do evento criado",
+          );
+        }
+
+        return { id, htmlLink: res.data.htmlLink ?? undefined };
+      } catch (err) {
+        if (err instanceof CalendarUnavailable) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        throw new CalendarUnavailable(
+          `Falha ao criar evento no Google Calendar: ${message}`,
+          { cause: err },
+        );
+      }
+    });
+
   return {
     name: "google_calendar",
     ready: true,
@@ -190,6 +252,18 @@ export function createGoogleCalendarClient(
         const message = err instanceof Error ? err.message : String(err);
         throw new CalendarUnavailable(
           `Google Calendar indisponível: ${message}`,
+          { cause: err },
+        );
+      }
+    },
+    async createEvent(input) {
+      try {
+        return await insertEvent(input);
+      } catch (err) {
+        if (err instanceof CalendarUnavailable) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        throw new CalendarUnavailable(
+          `Falha ao criar evento no Google Calendar: ${message}`,
           { cause: err },
         );
       }

@@ -1,3 +1,5 @@
+import type { CalendarClient } from "../calendar/google.js";
+import { createGoogleCalendarClient } from "../calendar/google.js";
 import type { Store } from "../store/index.js";
 import { createAgent, type Agent, type AgentDeps } from "./agent.js";
 import { createAnthropicClient, type ClaudeClient } from "./claude.js";
@@ -13,12 +15,20 @@ export {
   acionarHandoff,
   PRECO_SOB_AVALIACAO,
 } from "./tools.js";
+export {
+  proporHorarios,
+  confirmarAgendamento,
+  isAmbiguousSlotChoice,
+  isFullName,
+  expirePropostoIfNeeded,
+} from "./booking.js";
 export type { ClaudeClient } from "./claude.js";
 
 export type BrainDeps = {
   store: Store;
   apiKey?: string;
   claude?: ClaudeClient;
+  calendar?: CalendarClient;
   model?: string;
   getConfig?: AgentDeps["getConfig"];
   now?: AgentDeps["now"];
@@ -35,9 +45,12 @@ export function createBrain(deps: BrainDeps) {
         })(),
     );
 
+  const calendar = deps.calendar ?? createGoogleCalendarClient();
+
   const agent = createAgent({
     store: deps.store,
     claude,
+    calendar,
     model: deps.model,
     getConfig: deps.getConfig,
     now: deps.now,
@@ -47,6 +60,7 @@ export function createBrain(deps: BrainDeps) {
     name: "brain" as const,
     ready: true,
     agent,
+    calendar,
     handleText: (waId: string, text: string) =>
       agent.handleUserMessage(waId, text),
   };

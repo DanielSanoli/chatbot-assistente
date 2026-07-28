@@ -1,9 +1,12 @@
 import type { MessageParam, ToolUseBlock } from "@anthropic-ai/sdk/resources/messages/messages";
+import { DateTime } from "luxon";
+import type { CalendarClient } from "../calendar/google.js";
 import { ConfigService } from "../config/index.js";
 import type { ClientConfig } from "../config/schema.js";
 import { maskPhone } from "../channel/mask.js";
 import { logEvent, type Store } from "../store/index.js";
 import { getConversationWindow } from "../store/history.js";
+import { expirePropostoIfNeeded } from "./booking.js";
 import type { ClaudeClient } from "./claude.js";
 import { buildSystemPrompt } from "./prompt.js";
 import {
@@ -26,6 +29,7 @@ export type AgentTurnResult = {
 export type AgentDeps = {
   store: Store;
   claude: ClaudeClient;
+  calendar: CalendarClient;
   getConfig?: () => ClientConfig;
   model?: string;
   now?: () => Date;
@@ -38,7 +42,9 @@ function isToolName(name: string): name is ToolName {
     name === "info_local" ||
     name === "info_pagamento" ||
     name === "buscar_faq" ||
-    name === "acionar_handoff"
+    name === "acionar_handoff" ||
+    name === "propor_horarios" ||
+    name === "confirmar_agendamento"
   );
 }
 
@@ -56,8 +62,6 @@ function historyToMessages(
     messages.push({ role, content: item.texto });
   }
 
-  // Claude exige que a conversa termine em user para gerar a próxima resposta.
-  // A mensagem atual já está no histórico como "in".
   if (messages.length === 0) {
     return [{ role: "user", content: "Olá" }];
   }
@@ -108,19 +112,32 @@ export function createAgent(deps: AgentDeps) {
 
   async function handleUserMessage(
     waId: string,
-    _userText: string,
+    userText: string,
   ): Promise<AgentTurnResult> {
     const config = getConfig();
     const system = buildSystemPrompt(config);
-    const now = deps.now?.() ?? new Date();
+    const nowDate = deps.now?.() ?? new Date();
+    const agora = DateTime.fromJSDate(nowDate).setZone(config.cliente.timezone);
 
-    const history = getConversationWindow(deps.store, waId, { now });
+    expirePropostoIfNeeded({
+      store: deps.store,
+      config,
+      calendar: deps.calendar,
+      waId,
+      agora,
+      userText,
+    });
+
+    const history = getConversationWindow(deps.store, waId, {
+      now: nowDate,
+    });
     const messages = historyToMessages(history);
 
     const ferramentas: string[] = [];
     let handoff = false;
     let handoffReply: string | null = null;
     let finalText = "";
+    let bookingClientMessage: string | null = null;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const response = await deps.claude.createMessage({
@@ -165,7 +182,18 @@ export function createAgent(deps: AgentDeps) {
           toolUse.input && typeof toolUse.input === "object"
             ? (toolUse.input as Record<string, unknown>)
             : {};
-        const result = executeTool(config, name, input);
+        const result = await executeTool(
+          {
+            config,
+            store: deps.store,
+            calendar: deps.calendar,
+            waId,
+            agora,
+            userText,
+          },
+          name,
+          input,
+        );
 
         if (name === "acionar_handoff") {
           handoff = true;
@@ -173,13 +201,34 @@ export function createAgent(deps: AgentDeps) {
           handoffReply = data.mensagem;
         }
 
+        if (
+          name === "confirmar_agendamento" &&
+          result &&
+          typeof result === "object" &&
+          (result as { agendado?: boolean }).agendado === true &&
+          typeof (result as { mensagem_cliente?: string }).mensagem_cliente ===
+            "string"
+        ) {
+          bookingClientMessage = (result as { mensagem_cliente: string })
+            .mensagem_cliente;
+        }
+
         const forceReason = shouldForceHandoff(name, result);
         if (forceReason) {
           handoff = true;
-          const forced = executeTool(config, "acionar_handoff", {
-            motivo: forceReason,
-          }) as { mensagem: string };
-          handoffReply = forced.mensagem;
+          const forced = await executeTool(
+            {
+              config,
+              store: deps.store,
+              calendar: deps.calendar,
+              waId,
+              agora,
+              userText,
+            },
+            "acionar_handoff",
+            { motivo: forceReason },
+          );
+          handoffReply = (forced as { mensagem: string }).mensagem;
           ferramentas.push("acionar_handoff");
         }
 
@@ -197,6 +246,11 @@ export function createAgent(deps: AgentDeps) {
         break;
       }
 
+      if (bookingClientMessage) {
+        finalText = bookingClientMessage;
+        break;
+      }
+
       if (response.stop_reason === "end_turn") {
         finalText = extractText(response.content);
         break;
@@ -205,6 +259,9 @@ export function createAgent(deps: AgentDeps) {
 
     if (!finalText && handoffReply) {
       finalText = handoffReply;
+    }
+    if (!finalText && bookingClientMessage) {
+      finalText = bookingClientMessage;
     }
     if (!finalText) {
       finalText = config.handoff.mensagem;

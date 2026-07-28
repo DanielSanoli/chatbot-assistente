@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgent } from "../src/brain/agent.js";
 import { buildSystemPrompt } from "../src/brain/prompt.js";
+import type { CalendarClient } from "../src/calendar/google.js";
 import { ConfigService } from "../src/config/index.js";
 import {
   openStore,
@@ -17,6 +18,19 @@ import {
   textResult,
   toolUseResult,
 } from "./helpers/claudeMock.js";
+
+function noopCalendar(): CalendarClient {
+  return {
+    name: "google_calendar",
+    ready: true,
+    async queryBusy() {
+      return new Map();
+    },
+    async createEvent() {
+      return { id: "evt-test" };
+    },
+  };
+}
 
 const ENV: NodeJS.ProcessEnv = {
   WHATSAPP_PHONE_NUMBER_ID: "phone",
@@ -91,6 +105,7 @@ describe("agent conversation", () => {
 
     const agent = createAgent({
       store,
+      calendar: noopCalendar(),
       getConfig: () => config,
       claude: createScriptedClaude([
         () => toolUseResult("buscar_servico", { termo: "limpeza" }),
@@ -112,6 +127,7 @@ describe("agent conversation", () => {
 
     const agent = createAgent({
       store,
+      calendar: noopCalendar(),
       getConfig: () => config,
       claude: createScriptedClaude([
         () => toolUseResult("buscar_servico", { termo: "canal" }),
@@ -137,6 +153,7 @@ describe("agent conversation", () => {
 
     const agent = createAgent({
       store,
+      calendar: noopCalendar(),
       getConfig: () => config,
       claude: createScriptedClaude([
         () => toolUseResult("buscar_servico", { termo: "implante" }),
@@ -158,6 +175,7 @@ describe("agent conversation", () => {
 
     const agent = createAgent({
       store,
+      calendar: noopCalendar(),
       getConfig: () => config,
       claude: createScriptedClaude([
         ({ messages }) => {
@@ -181,6 +199,7 @@ describe("agent conversation", () => {
 
     const agent = createAgent({
       store,
+      calendar: noopCalendar(),
       getConfig: () => config,
       claude: createScriptedClaude([
         () => toolUseResult("info_local", {}),
@@ -204,6 +223,7 @@ describe("agent conversation", () => {
 
     const agent = createAgent({
       store,
+      calendar: noopCalendar(),
       getConfig: () => config,
       claude: createScriptedClaude([() => textResult("Olá! Como posso ajudar?")]),
     });
@@ -253,6 +273,7 @@ describe("agent conversation", () => {
 
       const agent = createAgent({
         store,
+        calendar: noopCalendar(),
         getConfig: () => config,
         claude: createScriptedClaude([
           ({ messages }) => {

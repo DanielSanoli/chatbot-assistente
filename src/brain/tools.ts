@@ -1,5 +1,14 @@
 import type { ClientConfig, Servico } from "../config/schema.js";
+import type { CalendarClient } from "../calendar/google.js";
+import type { Store } from "../store/index.js";
+import { DateTime } from "luxon";
 import { normalizeTerm } from "./normalize.js";
+import {
+  confirmarAgendamento,
+  markHandoffState,
+  proporHorarios,
+  type BookingContext,
+} from "./booking.js";
 
 export const PRECO_SOB_AVALIACAO = "preco_sob_avaliacao" as const;
 
@@ -9,7 +18,18 @@ export type ToolName =
   | "info_local"
   | "info_pagamento"
   | "buscar_faq"
-  | "acionar_handoff";
+  | "acionar_handoff"
+  | "propor_horarios"
+  | "confirmar_agendamento";
+
+export type ToolContext = {
+  config: ClientConfig;
+  store: Store;
+  calendar: CalendarClient;
+  waId: string;
+  agora?: DateTime;
+  userText?: string;
+};
 
 export type BuscarServicoResult =
   | {
@@ -88,7 +108,6 @@ export function listarServicos(config: ClientConfig) {
       id: s.id,
       nome: s.nome,
       aliases: s.aliases,
-      // Preços propositalmente omitidos — use buscar_servico para preço.
     })),
   };
 }
@@ -136,24 +155,51 @@ export function acionarHandoff(config: ClientConfig, motivo: string) {
   };
 }
 
-export function executeTool(
-  config: ClientConfig,
+function toBookingContext(ctx: ToolContext): BookingContext {
+  return {
+    store: ctx.store,
+    config: ctx.config,
+    calendar: ctx.calendar,
+    waId: ctx.waId,
+    agora: ctx.agora,
+    userText: ctx.userText,
+  };
+}
+
+export async function executeTool(
+  ctx: ToolContext,
   name: ToolName,
   input: Record<string, unknown>,
-): unknown {
+): Promise<unknown> {
   switch (name) {
     case "buscar_servico":
-      return buscarServico(config, String(input.termo ?? ""));
+      return buscarServico(ctx.config, String(input.termo ?? ""));
     case "listar_servicos":
-      return listarServicos(config);
+      return listarServicos(ctx.config);
     case "info_local":
-      return infoLocal(config);
+      return infoLocal(ctx.config);
     case "info_pagamento":
-      return infoPagamento(config);
+      return infoPagamento(ctx.config);
     case "buscar_faq":
-      return buscarFaq(config, String(input.assunto ?? ""));
-    case "acionar_handoff":
-      return acionarHandoff(config, String(input.motivo ?? "nao_informado"));
+      return buscarFaq(ctx.config, String(input.assunto ?? ""));
+    case "acionar_handoff": {
+      const motivo = String(input.motivo ?? "nao_informado");
+      markHandoffState(toBookingContext(ctx), motivo);
+      return acionarHandoff(ctx.config, motivo);
+    }
+    case "propor_horarios":
+      return proporHorarios(toBookingContext(ctx), {
+        servicoId: String(input.servicoId ?? ""),
+        preferencia:
+          input.preferencia !== undefined
+            ? String(input.preferencia)
+            : undefined,
+      });
+    case "confirmar_agendamento":
+      return confirmarAgendamento(toBookingContext(ctx), {
+        slotEscolhido: String(input.slotEscolhido ?? ""),
+        nomeCompleto: String(input.nomeCompleto ?? ""),
+      });
     default: {
       const _exhaustive: never = name;
       return { erro: `ferramenta desconhecida: ${_exhaustive}` };
@@ -219,9 +265,48 @@ export const ANTHROPIC_TOOLS = [
     },
   },
   {
+    name: "propor_horarios",
+    description:
+      "Propõe 2–3 horários livres para um serviço (lê a agenda). Use quando o cliente quiser agendar. Nunca invente horários.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        servicoId: {
+          type: "string",
+          description: "Id do serviço (ex.: limpeza). Prefira o id retornado por buscar_servico.",
+        },
+        preferencia: {
+          type: "string",
+          description: "Preferência opcional do cliente (manhã, tarde, dia da semana).",
+        },
+      },
+      required: ["servicoId"],
+    },
+  },
+  {
+    name: "confirmar_agendamento",
+    description:
+      "Confirma e cria o evento no Google SOMENTE com escolha inequívoca de um horário proposto e nome completo. Nunca use se o cliente disser 'pode ser', 'qualquer um' ou 'tanto faz'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        slotEscolhido: {
+          type: "string",
+          description:
+            "Identificador inequívoco: número da opção (1/2/3) ou dia/hora específicos do slot proposto.",
+        },
+        nomeCompleto: {
+          type: "string",
+          description: "Nome e sobrenome do paciente. Obrigatório.",
+        },
+      },
+      required: ["slotEscolhido", "nomeCompleto"],
+    },
+  },
+  {
     name: "acionar_handoff",
     description:
-      "Transfere para a recepção humana. Obrigatório quando faltar fonte de ferramenta, preço sob avaliação, serviço inexistente, ou a regra central exigir.",
+      "Transfere para a recepção humana e encerra a automação. Obrigatório quando faltar fonte, preço sob avaliação, serviço inexistente, ou a regra central exigir.",
     input_schema: {
       type: "object" as const,
       properties: {

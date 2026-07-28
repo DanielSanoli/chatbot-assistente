@@ -5,8 +5,8 @@ export type MessageDirection = "in" | "out";
 export function upsertConversation(store: Store, waId: string): number {
   store.db
     .prepare(
-      `INSERT INTO conversations (wa_id, estado, atualizado_em)
-       VALUES (?, 'novo', datetime('now'))
+      `INSERT INTO conversations (wa_id, estado, estado_payload, atualizado_em)
+       VALUES (?, 'LIVRE', '{}', datetime('now'))
        ON CONFLICT(wa_id) DO UPDATE SET atualizado_em = datetime('now')`,
     )
     .run(waId);

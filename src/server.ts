@@ -77,9 +77,12 @@ async function main(): Promise<void> {
 
   const app = Fastify({ logger: true });
 
+  const calendar = createGoogleCalendarClient();
+
   const brain = createBrain({
     store,
     apiKey: anthropicKey,
+    calendar,
   });
 
   const whatsapp = createWhatsappChannel({
@@ -114,8 +117,6 @@ async function main(): Promise<void> {
     },
   });
   whatsapp.registerRoutes(app);
-
-  createGoogleCalendarClient();
 
   app.get("/health", async () => ({
     ok: true,

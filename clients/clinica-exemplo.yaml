@@ -1,0 +1,94 @@
+cliente:
+  id: clinica-exemplo
+  nome: Clínica Exemplo
+  timezone: America/Sao_Paulo
+
+whatsapp:
+  phone_number_id: "${WHATSAPP_PHONE_NUMBER_ID}"
+  access_token: "${WHATSAPP_ACCESS_TOKEN}"
+  verify_token: "${WHATSAPP_VERIFY_TOKEN}"
+  webhook_path: /webhook/whatsapp
+
+google_calendar:
+  calendar_id: "${GOOGLE_CALENDAR_ID}"
+  credentials_path: "${GOOGLE_CREDENTIALS_PATH}"
+
+funcionamento:
+  dias:
+    - segunda
+    - terca
+    - quarta
+    - quinta
+    - sexta
+  horario:
+    inicio: "08:00"
+    fim: "18:00"
+  intervalo_almoco:
+    inicio: "12:00"
+    fim: "13:00"
+
+profissionais:
+  - id: dra-ana
+    nome: Dra. Ana Silva
+    servicos:
+      - consulta
+      - retorno
+    calendario_id: "${GOOGLE_CALENDAR_ANA}"
+  - id: dr-bruno
+    nome: Dr. Bruno Costa
+    servicos:
+      - consulta
+      - avaliacao
+    calendario_id: "${GOOGLE_CALENDAR_BRUNO}"
+
+servicos:
+  - id: consulta
+    nome: Consulta inicial
+    duracao_min: 40
+    preco: 280
+  - id: retorno
+    nome: Retorno
+    duracao_min: 20
+    preco: null
+  - id: avaliacao
+    nome: Avaliação completa
+    duracao_min: 60
+    preco: 450
+
+local:
+  endereco: Rua das Flores, 123
+  bairro: Jardins
+  cidade: São Paulo
+  estado: SP
+  cep: "01415-000"
+  complemento: Sala 4
+  referencia: Próximo ao metrô Consolação
+
+pagamento:
+  formas:
+    - pix
+    - cartao
+    - dinheiro
+  instrucoes: Preferência por PIX. Cartão e dinheiro aceitos no local.
+
+faq:
+  - pergunta: Como remarcar uma consulta?
+    resposta: Peça a remarcação por aqui com pelo menos 24h de antecedência.
+  - pergunta: Preciso chegar adiantado?
+    resposta: Chegue com 10 minutos de antecedência para o cadastro.
+
+tom_de_voz:
+  estilo: profissional e acolhedor
+  linguagem: pt-BR
+  evitar:
+    - gírias
+    - promessas médicas
+    - diagnósticos
+
+handoff:
+  gatilhos:
+    - preco_nao_informado
+    - emergencia
+    - reclamacao
+  contato: "${HANDOFF_WHATSAPP}"
+  mensagem: Vou te transferir para a recepção agora.

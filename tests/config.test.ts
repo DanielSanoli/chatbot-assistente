@@ -80,9 +80,12 @@ tom_de_voz:
   evitar: [gírias]
 
 handoff:
+  gatilhos_explicitos: [falar com atendente]
+  temas_sempre_humano: [reclamacao]
   gatilhos: [preco_nao_informado]
-  contato: "\${HANDOFF_WHATSAPP}"
+  numero_humano: "\${HANDOFF_WHATSAPP}"
   mensagem: Transferindo para a recepção.
+  fora_do_horario: Fora do horário; a recepção retorna depois.
 `;
 
 function writeTempYaml(contents: string): string {

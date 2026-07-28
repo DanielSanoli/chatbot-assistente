@@ -5,9 +5,10 @@ import { ConfigService } from "./config/index.js";
 import { ConfigLoadError } from "./config/load.js";
 import { createWhatsappChannel } from "./channel/index.js";
 import { createGoogleCalendarClient } from "./calendar/index.js";
-import { createBrain } from "./brain/index.js";
+import { createBrain, transferToHuman } from "./brain/index.js";
 import { openStore, logEvent } from "./store/index.js";
 import { maskPhone } from "./channel/mask.js";
+import { DateTime } from "luxon";
 
 function loadDotEnv(filePath = ".env"): void {
   const absolute = resolve(filePath);
@@ -79,10 +80,17 @@ async function main(): Promise<void> {
 
   const calendar = createGoogleCalendarClient();
 
+  let sendText!: (waId: string, texto: string) => Promise<void>;
+
+  const notifyHuman = async (numeroHumano: string, resumo: string) => {
+    await sendText(numeroHumano.replace(/\D/g, ""), resumo);
+  };
+
   const brain = createBrain({
     store,
     apiKey: anthropicKey,
     calendar,
+    notifyHuman,
   });
 
   const whatsapp = createWhatsappChannel({
@@ -99,6 +107,9 @@ async function main(): Promise<void> {
     onTextMessage: async ({ waId, text }) => {
       try {
         const turn = await brain.handleText(waId, text);
+        if (turn.muted || turn.reply === null) {
+          return;
+        }
         await whatsapp.sendText(waId, turn.reply);
       } catch (err) {
         app.log.error(
@@ -112,10 +123,35 @@ async function main(): Promise<void> {
           wa_id_masked: maskPhone(waId),
           error: err instanceof Error ? err.message : String(err),
         });
-        await whatsapp.sendText(waId, config.handoff.mensagem);
+        try {
+          const transfer = await transferToHuman({
+            store,
+            config,
+            waId,
+            motivo: "erro_interno:exception",
+            intencao: text,
+            userText: text,
+            agora: DateTime.now().setZone(config.cliente.timezone),
+            notifyHuman,
+          });
+          await whatsapp.sendText(waId, transfer.clientMessage);
+        } catch (handoffErr) {
+          app.log.error(
+            {
+              err:
+                handoffErr instanceof Error
+                  ? handoffErr.message
+                  : String(handoffErr),
+            },
+            "handoff após erro também falhou",
+          );
+          await whatsapp.sendText(waId, config.handoff.mensagem);
+        }
       }
     },
   });
+
+  sendText = whatsapp.sendText.bind(whatsapp);
   whatsapp.registerRoutes(app);
 
   app.get("/health", async () => ({

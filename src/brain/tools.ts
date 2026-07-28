@@ -5,10 +5,14 @@ import { DateTime } from "luxon";
 import { normalizeTerm } from "./normalize.js";
 import {
   confirmarAgendamento,
-  markHandoffState,
   proporHorarios,
   type BookingContext,
 } from "./booking.js";
+import {
+  matchTemaSempreHumano,
+  registerUnderstandingFailure,
+  transferToHuman,
+} from "./handoff.js";
 
 export const PRECO_SOB_AVALIACAO = "preco_sob_avaliacao" as const;
 
@@ -19,6 +23,7 @@ export type ToolName =
   | "info_pagamento"
   | "buscar_faq"
   | "acionar_handoff"
+  | "registrar_falha_entendimento"
   | "propor_horarios"
   | "confirmar_agendamento";
 
@@ -29,6 +34,7 @@ export type ToolContext = {
   waId: string;
   agora?: DateTime;
   userText?: string;
+  notifyHuman: (numeroHumano: string, resumo: string) => Promise<void>;
 };
 
 export type BuscarServicoResult =
@@ -146,15 +152,6 @@ export function buscarFaq(config: ClientConfig, assunto: string) {
   };
 }
 
-export function acionarHandoff(config: ClientConfig, motivo: string) {
-  return {
-    handoff: true as const,
-    motivo,
-    mensagem: config.handoff.mensagem,
-    contato: config.handoff.contato,
-  };
-}
-
 function toBookingContext(ctx: ToolContext): BookingContext {
   return {
     store: ctx.store,
@@ -184,8 +181,62 @@ export async function executeTool(
       return buscarFaq(ctx.config, String(input.assunto ?? ""));
     case "acionar_handoff": {
       const motivo = String(input.motivo ?? "nao_informado");
-      markHandoffState(toBookingContext(ctx), motivo);
-      return acionarHandoff(ctx.config, motivo);
+      const tema = matchTemaSempreHumano(
+        motivo,
+        ctx.config.handoff.temas_sempre_humano,
+      );
+      const transfer = await transferToHuman({
+        store: ctx.store,
+        config: ctx.config,
+        waId: ctx.waId,
+        motivo: tema ?? motivo,
+        intencao:
+          input.intencao !== undefined
+            ? String(input.intencao)
+            : ctx.userText,
+        userText: ctx.userText,
+        agora: ctx.agora,
+        notifyHuman: ctx.notifyHuman,
+      });
+      return {
+        handoff: true as const,
+        motivo: transfer.motivo,
+        mensagem: transfer.clientMessage,
+        resumo_humano: transfer.humanSummary,
+        numero_humano: transfer.numeroHumano,
+        estado: transfer.estado,
+      };
+    }
+    case "registrar_falha_entendimento": {
+      const assunto = String(input.assunto ?? ctx.userText ?? "geral");
+      const falha = registerUnderstandingFailure(ctx.store, ctx.waId, assunto);
+      if (falha.deveTransferir) {
+        const transfer = await transferToHuman({
+          store: ctx.store,
+          config: ctx.config,
+          waId: ctx.waId,
+          motivo: "falha_entendimento",
+          intencao: assunto,
+          userText: ctx.userText,
+          agora: ctx.agora,
+          notifyHuman: ctx.notifyHuman,
+        });
+        return {
+          handoff: true as const,
+          count: falha.count,
+          deveTransferir: true,
+          motivo: "falha_entendimento",
+          mensagem: transfer.clientMessage,
+          resumo_humano: transfer.humanSummary,
+        };
+      }
+      return {
+        handoff: false as const,
+        count: falha.count,
+        deveTransferir: false,
+        mensagem:
+          "Falha registrada. Peça esclarecimento uma vez. Na próxima falha no mesmo assunto, transfira.",
+      };
     }
     case "propor_horarios":
       return proporHorarios(toBookingContext(ctx), {
@@ -267,17 +318,17 @@ export const ANTHROPIC_TOOLS = [
   {
     name: "propor_horarios",
     description:
-      "Propõe 2–3 horários livres para um serviço (lê a agenda). Use quando o cliente quiser agendar. Nunca invente horários.",
+      "Propõe 2–3 horários livres para um serviço (lê a agenda). Use quando o cliente quiser agendar. Nunca invente horários. NÃO use se houver urgência clínica (dor forte, sangramento, inchaço).",
     input_schema: {
       type: "object" as const,
       properties: {
         servicoId: {
           type: "string",
-          description: "Id do serviço (ex.: limpeza). Prefira o id retornado por buscar_servico.",
+          description: "Id do serviço (ex.: limpeza).",
         },
         preferencia: {
           type: "string",
-          description: "Preferência opcional do cliente (manhã, tarde, dia da semana).",
+          description: "Preferência opcional (manhã, domingo, etc.).",
         },
       },
       required: ["servicoId"],
@@ -286,34 +337,46 @@ export const ANTHROPIC_TOOLS = [
   {
     name: "confirmar_agendamento",
     description:
-      "Confirma e cria o evento no Google SOMENTE com escolha inequívoca de um horário proposto e nome completo. Nunca use se o cliente disser 'pode ser', 'qualquer um' ou 'tanto faz'.",
+      "Confirma e cria o evento no Google SOMENTE com escolha inequívoca de um horário proposto e nome completo.",
     input_schema: {
       type: "object" as const,
       properties: {
-        slotEscolhido: {
-          type: "string",
-          description:
-            "Identificador inequívoco: número da opção (1/2/3) ou dia/hora específicos do slot proposto.",
-        },
-        nomeCompleto: {
-          type: "string",
-          description: "Nome e sobrenome do paciente. Obrigatório.",
-        },
+        slotEscolhido: { type: "string" },
+        nomeCompleto: { type: "string" },
       },
       required: ["slotEscolhido", "nomeCompleto"],
     },
   },
   {
+    name: "registrar_falha_entendimento",
+    description:
+      "Registra que você não entendeu o cliente neste assunto. Na segunda falha seguida no mesmo assunto, transfere automaticamente para humano.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        assunto: {
+          type: "string",
+          description: "Assunto que não foi entendido (ex.: horario, servico).",
+        },
+      },
+      required: ["assunto"],
+    },
+  },
+  {
     name: "acionar_handoff",
     description:
-      "Transfere para a recepção humana e encerra a automação. Obrigatório quando faltar fonte, preço sob avaliação, serviço inexistente, ou a regra central exigir.",
+      "Transfere para humano e silencia o bot. Obrigatório para temas_sempre_humano (reclamacao, cobranca, processo…), urgência, preço sob avaliação, serviço inexistente ou erro. Informe o tema/motivo.",
     input_schema: {
       type: "object" as const,
       properties: {
         motivo: {
           type: "string",
           description:
-            "Motivo do handoff (ex.: preco_nao_informado, servico_inexistente)",
+            "Motivo ou tema (ex.: reclamacao, urgencia_clinica, preco_nao_informado).",
+        },
+        intencao: {
+          type: "string",
+          description: "O que o cliente queria, em uma frase.",
         },
       },
       required: ["motivo"],

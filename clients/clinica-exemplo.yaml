@@ -114,10 +114,25 @@ tom_de_voz:
     - diagnósticos
 
 handoff:
+  gatilhos_explicitos:
+    - falar com humano
+    - falar com atendente
+    - quero um atendente
+    - pessoa de verdade
+    - atendente
+  temas_sempre_humano:
+    - reclamacao
+    - cobranca
+    - processo
+    - assedio
   gatilhos:
     - preco_nao_informado
     - servico_inexistente
     - emergencia
-    - reclamacao
-  contato: "${HANDOFF_WHATSAPP}"
-  mensagem: Vou te transferir para a recepção agora.
+    - urgencia_clinica
+    - falha_entendimento
+    - erro_interno
+  numero_humano: "${HANDOFF_WHATSAPP}"
+  mensagem: Vou te transferir para a recepção agora. Em instantes alguém te atende por aqui.
+  fora_do_horario: No momento estamos fora do horário de atendimento. Vou registrar seu pedido e a recepção retorna assim que possível.
+  silencio_em_humano_horas: 12

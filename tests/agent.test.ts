@@ -32,6 +32,8 @@ function noopCalendar(): CalendarClient {
   };
 }
 
+const noopNotifyHuman = async () => undefined;
+
 const ENV: NodeJS.ProcessEnv = {
   WHATSAPP_PHONE_NUMBER_ID: "phone",
   WHATSAPP_ACCESS_TOKEN: "token",
@@ -106,6 +108,7 @@ describe("agent conversation", () => {
     const agent = createAgent({
       store,
       calendar: noopCalendar(),
+      notifyHuman: noopNotifyHuman,
       getConfig: () => config,
       claude: createScriptedClaude([
         () => toolUseResult("buscar_servico", { termo: "limpeza" }),
@@ -115,7 +118,7 @@ describe("agent conversation", () => {
 
     const turn = await agent.handleUserMessage(waId, "quanto custa limpeza");
     expect(turn.handoff).toBe(false);
-    expect(turn.reply).toContain(String(preco));
+    expect(turn.reply ?? "").toContain(String(preco));
     expect(turn.ferramentas).toContain("buscar_servico");
     expect(turn.respostaSemFonte).toBe(false);
   });
@@ -128,6 +131,7 @@ describe("agent conversation", () => {
     const agent = createAgent({
       store,
       calendar: noopCalendar(),
+      notifyHuman: noopNotifyHuman,
       getConfig: () => config,
       claude: createScriptedClaude([
         () => toolUseResult("buscar_servico", { termo: "canal" }),
@@ -136,11 +140,13 @@ describe("agent conversation", () => {
 
     const turn = await agent.handleUserMessage(waId, "quanto custa canal");
     expect(turn.handoff).toBe(true);
-    expect(turn.reply).toBe(config.handoff.mensagem);
+    expect([config.handoff.mensagem, config.handoff.fora_do_horario]).toContain(
+      turn.reply,
+    );
     expect(turn.ferramentas).toEqual(
       expect.arrayContaining(["buscar_servico", "acionar_handoff"]),
     );
-    expect(turn.reply).not.toMatch(/\d{2,}/);
+    expect(turn.reply ?? "").not.toMatch(/\d{2,}/);
     expect(eventsOfType(store, "brain.turno")[0]).toMatchObject({
       handoff: true,
     });
@@ -154,6 +160,7 @@ describe("agent conversation", () => {
     const agent = createAgent({
       store,
       calendar: noopCalendar(),
+      notifyHuman: noopNotifyHuman,
       getConfig: () => config,
       claude: createScriptedClaude([
         () => toolUseResult("buscar_servico", { termo: "implante" }),
@@ -162,8 +169,10 @@ describe("agent conversation", () => {
 
     const turn = await agent.handleUserMessage(waId, "vocês fazem implante");
     expect(turn.handoff).toBe(true);
-    expect(turn.reply).toBe(config.handoff.mensagem);
-    expect(turn.reply.toLowerCase()).not.toContain("implante dentário");
+    expect([config.handoff.mensagem, config.handoff.fora_do_horario]).toContain(
+      turn.reply,
+    );
+    expect((turn.reply ?? "").toLowerCase()).not.toContain("implante dentário");
     expect(turn.ferramentas).toContain("acionar_handoff");
   });
 
@@ -176,6 +185,7 @@ describe("agent conversation", () => {
     const agent = createAgent({
       store,
       calendar: noopCalendar(),
+      notifyHuman: noopNotifyHuman,
       getConfig: () => config,
       claude: createScriptedClaude([
         ({ messages }) => {
@@ -188,7 +198,7 @@ describe("agent conversation", () => {
     });
 
     const turn = await agent.handleUserMessage(waId, "quanto custa tártaro");
-    expect(turn.reply).toContain(String(preco));
+    expect(turn.reply ?? "").toContain(String(preco));
     expect(turn.handoff).toBe(false);
   });
 
@@ -200,6 +210,7 @@ describe("agent conversation", () => {
     const agent = createAgent({
       store,
       calendar: noopCalendar(),
+      notifyHuman: noopNotifyHuman,
       getConfig: () => config,
       claude: createScriptedClaude([
         () => toolUseResult("info_local", {}),
@@ -212,7 +223,7 @@ describe("agent conversation", () => {
 
     const turn = await agent.handleUserMessage(waId, "tem estacionamento?");
     expect(turn.ferramentas).toContain("info_local");
-    expect(turn.reply).toContain("estacionamento");
+    expect(turn.reply ?? "").toContain("estacionamento");
     expect(turn.handoff).toBe(false);
   });
 
@@ -224,6 +235,7 @@ describe("agent conversation", () => {
     const agent = createAgent({
       store,
       calendar: noopCalendar(),
+      notifyHuman: noopNotifyHuman,
       getConfig: () => config,
       claude: createScriptedClaude([() => textResult("Olá! Como posso ajudar?")]),
     });
@@ -274,6 +286,7 @@ describe("agent conversation", () => {
       const agent = createAgent({
         store,
         calendar: noopCalendar(),
+        notifyHuman: noopNotifyHuman,
         getConfig: () => config,
         claude: createScriptedClaude([
           ({ messages }) => {
@@ -338,7 +351,7 @@ describe("agent conversation", () => {
       const turn = await agent.handleUserMessage(waId, pergunta);
 
       // Nenhum valor numérico de preço fora do YAML.
-      const mentioned = turn.reply.match(/R\$\s*(\d+(?:[.,]\d+)?)/gi) ?? [];
+      const mentioned = (turn.reply ?? "").match(/R\$\s*(\d+(?:[.,]\d+)?)/gi) ?? [];
       for (const hit of mentioned) {
         const digits = hit.replace(/[^\d]/g, "");
         expect(precosPermitidos.has(digits)).toBe(true);
@@ -360,7 +373,10 @@ describe("agent conversation", () => {
 
       if (asksNullPriceService || asksUnknown) {
         expect(turn.handoff).toBe(true);
-        expect(turn.reply).toBe(config.handoff.mensagem);
+        expect([
+          config.handoff.mensagem,
+          config.handoff.fora_do_horario,
+        ]).toContain(turn.reply);
       }
     }
   });

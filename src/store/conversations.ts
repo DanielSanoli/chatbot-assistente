@@ -5,7 +5,7 @@ export const CONVERSATION_STATES = [
   "COLETANDO",
   "PROPOSTO",
   "CONFIRMADO",
-  "HANDOFF",
+  "EM_HUMANO",
 ] as const;
 
 export type ConversationState = (typeof CONVERSATION_STATES)[number];
@@ -20,6 +20,11 @@ export type ProposedSlot = {
   servicoId: string;
 };
 
+export type FalhaEntendimento = {
+  assunto: string;
+  count: number;
+};
+
 export type EstadoPayload = {
   servicoId?: string;
   nomeCompleto?: string;
@@ -27,6 +32,10 @@ export type EstadoPayload = {
   slots?: ProposedSlot[];
   eventId?: string;
   preferencia?: string;
+  intencao?: string;
+  motivoHandoff?: string;
+  emHumanoDesde?: string;
+  falhasEntendimento?: FalhaEntendimento;
 };
 
 export type ConversationRow = {
@@ -51,6 +60,7 @@ function parsePayload(raw: string | null | undefined): EstadoPayload {
 }
 
 function normalizeEstado(value: string): ConversationState {
+  if (value === "HANDOFF") return "EM_HUMANO";
   if ((CONVERSATION_STATES as readonly string[]).includes(value)) {
     return value as ConversationState;
   }

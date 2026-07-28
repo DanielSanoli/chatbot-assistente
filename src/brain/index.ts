@@ -12,7 +12,6 @@ export {
   infoLocal,
   infoPagamento,
   buscarFaq,
-  acionarHandoff,
   PRECO_SOB_AVALIACAO,
 } from "./tools.js";
 export {
@@ -22,6 +21,16 @@ export {
   isFullName,
   expirePropostoIfNeeded,
 } from "./booking.js";
+export {
+  transferToHuman,
+  detectUrgency,
+  detectExplicitHandoff,
+  isMutedEmHumano,
+  recordDemandaNaoAtendida,
+  registerUnderstandingFailure,
+  clientHandoffMessage,
+  buildHumanSummary,
+} from "./handoff.js";
 export type { ClaudeClient } from "./claude.js";
 
 export type BrainDeps = {
@@ -29,6 +38,7 @@ export type BrainDeps = {
   apiKey?: string;
   claude?: ClaudeClient;
   calendar?: CalendarClient;
+  notifyHuman: (numeroHumano: string, resumo: string) => Promise<void>;
   model?: string;
   getConfig?: AgentDeps["getConfig"];
   now?: AgentDeps["now"];
@@ -51,6 +61,7 @@ export function createBrain(deps: BrainDeps) {
     store: deps.store,
     claude,
     calendar,
+    notifyHuman: deps.notifyHuman,
     model: deps.model,
     getConfig: deps.getConfig,
     now: deps.now,

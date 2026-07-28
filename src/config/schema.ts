@@ -127,9 +127,16 @@ export const TomDeVozSchema = z.object({
 });
 
 export const HandoffSchema = z.object({
-  gatilhos: z.array(z.string().min(1)).min(1),
-  contato: z.string().min(1),
+  /** Frases do cliente que pedem humano (ex.: "falar com atendente"). */
+  gatilhos_explicitos: z.array(z.string().min(1)).min(1),
+  /** Temas que o modelo deve transferir sempre (reclamação, cobrança…). */
+  temas_sempre_humano: z.array(z.string().min(1)).min(1),
+  /** Motivos internos legados / ferramentas (preco_nao_informado, etc.). */
+  gatilhos: z.array(z.string().min(1)).default([]),
+  numero_humano: z.string().min(1),
   mensagem: z.string().min(1),
+  fora_do_horario: z.string().min(1),
+  silencio_em_humano_horas: z.number().positive().default(12),
 });
 
 export const ClientConfigSchema = z

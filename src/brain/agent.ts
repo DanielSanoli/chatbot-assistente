@@ -1,6 +1,7 @@
 import type { MessageParam, ToolUseBlock } from "@anthropic-ai/sdk/resources/messages/messages";
 import { DateTime } from "luxon";
 import type { CalendarClient } from "../calendar/google.js";
+import { CalendarUnavailable } from "../calendar/google.js";
 import { ConfigService } from "../config/index.js";
 import type { ClientConfig } from "../config/schema.js";
 import { maskPhone } from "../channel/mask.js";
@@ -8,6 +9,12 @@ import { logEvent, type Store } from "../store/index.js";
 import { getConversationWindow } from "../store/history.js";
 import { expirePropostoIfNeeded } from "./booking.js";
 import type { ClaudeClient } from "./claude.js";
+import {
+  detectExplicitHandoff,
+  detectUrgency,
+  isMutedEmHumano,
+  transferToHuman,
+} from "./handoff.js";
 import { buildSystemPrompt } from "./prompt.js";
 import {
   ANTHROPIC_TOOLS,
@@ -20,7 +27,9 @@ const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 const MAX_TOOL_ROUNDS = 6;
 
 export type AgentTurnResult = {
-  reply: string;
+  /** null = bot silenciado (EM_HUMANO); servidor não deve enviar nada. */
+  reply: string | null;
+  muted: boolean;
   ferramentas: string[];
   handoff: boolean;
   respostaSemFonte: boolean;
@@ -30,6 +39,7 @@ export type AgentDeps = {
   store: Store;
   claude: ClaudeClient;
   calendar: CalendarClient;
+  notifyHuman: (numeroHumano: string, resumo: string) => Promise<void>;
   getConfig?: () => ClientConfig;
   model?: string;
   now?: () => Date;
@@ -43,6 +53,7 @@ function isToolName(name: string): name is ToolName {
     name === "info_pagamento" ||
     name === "buscar_faq" ||
     name === "acionar_handoff" ||
+    name === "registrar_falha_entendimento" ||
     name === "propor_horarios" ||
     name === "confirmar_agendamento"
   );
@@ -115,9 +126,68 @@ export function createAgent(deps: AgentDeps) {
     userText: string,
   ): Promise<AgentTurnResult> {
     const config = getConfig();
-    const system = buildSystemPrompt(config);
     const nowDate = deps.now?.() ?? new Date();
     const agora = DateTime.fromJSDate(nowDate).setZone(config.cliente.timezone);
+
+    const toolCtxBase = {
+      config,
+      store: deps.store,
+      calendar: deps.calendar,
+      waId,
+      agora,
+      userText,
+      notifyHuman: deps.notifyHuman,
+    };
+
+    // (mute) EM_HUMANO por 12h — bot não responde nada.
+    if (isMutedEmHumano(deps.store, waId, config, agora)) {
+      logEvent(deps.store, "handoff.mensagem_ignorada", {
+        wa_id_masked: maskPhone(waId),
+      });
+      return {
+        reply: null,
+        muted: true,
+        ferramentas: [],
+        handoff: true,
+        respostaSemFonte: false,
+      };
+    }
+
+    // Urgência clínica — prioridade máxima, sem agendar.
+    if (detectUrgency(userText)) {
+      const transfer = await transferToHuman({
+        ...toolCtxBase,
+        motivo: "urgencia_clinica",
+        intencao: userText,
+      });
+      return {
+        reply: transfer.clientMessage,
+        muted: false,
+        ferramentas: ["acionar_handoff"],
+        handoff: true,
+        respostaSemFonte: false,
+      };
+    }
+
+    // Gatilho explícito de handoff.
+    const explicit = detectExplicitHandoff(
+      userText,
+      config.handoff.gatilhos_explicitos,
+    );
+    if (explicit) {
+      const transfer = await transferToHuman({
+        ...toolCtxBase,
+        motivo: `gatilho_explicito:${explicit}`,
+        intencao: userText,
+      });
+      return {
+        reply: transfer.clientMessage,
+        muted: false,
+        ferramentas: ["acionar_handoff"],
+        handoff: true,
+        respostaSemFonte: false,
+      };
+    }
 
     expirePropostoIfNeeded({
       store: deps.store,
@@ -128,6 +198,7 @@ export function createAgent(deps: AgentDeps) {
       userText,
     });
 
+    const system = buildSystemPrompt(config);
     const history = getConversationWindow(deps.store, waId, {
       now: nowDate,
     });
@@ -139,122 +210,150 @@ export function createAgent(deps: AgentDeps) {
     let finalText = "";
     let bookingClientMessage: string | null = null;
 
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const response = await deps.claude.createMessage({
-        model,
-        system,
-        messages,
-        tools: ANTHROPIC_TOOLS,
-        max_tokens: 1024,
-      });
+    try {
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const response = await deps.claude.createMessage({
+          model,
+          system,
+          messages,
+          tools: ANTHROPIC_TOOLS,
+          max_tokens: 1024,
+        });
 
-      const toolUses = response.content.filter(
-        (block): block is ToolUseBlock => block.type === "tool_use",
-      );
+        const toolUses = response.content.filter(
+          (block): block is ToolUseBlock => block.type === "tool_use",
+        );
 
-      if (toolUses.length === 0) {
-        finalText = extractText(response.content);
-        break;
-      }
+        if (toolUses.length === 0) {
+          finalText = extractText(response.content);
+          break;
+        }
 
-      messages.push({ role: "assistant", content: response.content });
+        messages.push({ role: "assistant", content: response.content });
 
-      const toolResults: Array<{
-        type: "tool_result";
-        tool_use_id: string;
-        content: string;
-      }> = [];
+        const toolResults: Array<{
+          type: "tool_result";
+          tool_use_id: string;
+          content: string;
+        }> = [];
 
-      for (const toolUse of toolUses) {
-        const name = toolUse.name;
-        ferramentas.push(name);
+        for (const toolUse of toolUses) {
+          const name = toolUse.name;
+          ferramentas.push(name);
 
-        if (!isToolName(name)) {
+          if (!isToolName(name)) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({
+                erro: `ferramenta desconhecida: ${name}`,
+              }),
+            });
+            continue;
+          }
+
+          const input =
+            toolUse.input && typeof toolUse.input === "object"
+              ? (toolUse.input as Record<string, unknown>)
+              : {};
+
+          let result: unknown;
+          try {
+            result = await executeTool(toolCtxBase, name, input);
+          } catch (err) {
+            const motivo =
+              err instanceof CalendarUnavailable
+                ? "erro_interno:CalendarUnavailable"
+                : `erro_interno:${err instanceof Error ? err.name : "Error"}`;
+            const transfer = await transferToHuman({
+              ...toolCtxBase,
+              motivo,
+              intencao: userText,
+            });
+            return {
+              reply: transfer.clientMessage,
+              muted: false,
+              ferramentas: [...ferramentas, "acionar_handoff"],
+              handoff: true,
+              respostaSemFonte: false,
+            };
+          }
+
+          if (
+            (name === "acionar_handoff" ||
+              name === "registrar_falha_entendimento") &&
+            result &&
+            typeof result === "object" &&
+            (result as { handoff?: boolean }).handoff === true
+          ) {
+            handoff = true;
+            handoffReply = (result as { mensagem: string }).mensagem;
+          }
+
+          if (
+            name === "confirmar_agendamento" &&
+            result &&
+            typeof result === "object" &&
+            (result as { agendado?: boolean }).agendado === true &&
+            typeof (result as { mensagem_cliente?: string }).mensagem_cliente ===
+              "string"
+          ) {
+            bookingClientMessage = (result as { mensagem_cliente: string })
+              .mensagem_cliente;
+          }
+
+          const forceReason = shouldForceHandoff(name, result);
+          if (forceReason) {
+            const forced = await executeTool(toolCtxBase, "acionar_handoff", {
+              motivo: forceReason,
+              intencao: userText,
+            });
+            handoff = true;
+            handoffReply = (forced as { mensagem: string }).mensagem;
+            ferramentas.push("acionar_handoff");
+          }
+
           toolResults.push({
             type: "tool_result",
             tool_use_id: toolUse.id,
-            content: JSON.stringify({ erro: `ferramenta desconhecida: ${name}` }),
+            content: JSON.stringify(result),
           });
-          continue;
         }
 
-        const input =
-          toolUse.input && typeof toolUse.input === "object"
-            ? (toolUse.input as Record<string, unknown>)
-            : {};
-        const result = await executeTool(
-          {
-            config,
-            store: deps.store,
-            calendar: deps.calendar,
-            waId,
-            agora,
-            userText,
-          },
-          name,
-          input,
-        );
+        messages.push({ role: "user", content: toolResults });
 
-        if (name === "acionar_handoff") {
-          handoff = true;
-          const data = result as { mensagem: string };
-          handoffReply = data.mensagem;
+        if (handoff && handoffReply) {
+          finalText = handoffReply;
+          break;
         }
 
-        if (
-          name === "confirmar_agendamento" &&
-          result &&
-          typeof result === "object" &&
-          (result as { agendado?: boolean }).agendado === true &&
-          typeof (result as { mensagem_cliente?: string }).mensagem_cliente ===
-            "string"
-        ) {
-          bookingClientMessage = (result as { mensagem_cliente: string })
-            .mensagem_cliente;
+        if (bookingClientMessage) {
+          finalText = bookingClientMessage;
+          break;
         }
 
-        const forceReason = shouldForceHandoff(name, result);
-        if (forceReason) {
-          handoff = true;
-          const forced = await executeTool(
-            {
-              config,
-              store: deps.store,
-              calendar: deps.calendar,
-              waId,
-              agora,
-              userText,
-            },
-            "acionar_handoff",
-            { motivo: forceReason },
-          );
-          handoffReply = (forced as { mensagem: string }).mensagem;
-          ferramentas.push("acionar_handoff");
+        if (response.stop_reason === "end_turn") {
+          finalText = extractText(response.content);
+          break;
         }
-
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: toolUse.id,
-          content: JSON.stringify(result),
-        });
       }
-
-      messages.push({ role: "user", content: toolResults });
-
-      if (handoff && handoffReply) {
-        finalText = handoffReply;
-        break;
-      }
-
-      if (bookingClientMessage) {
-        finalText = bookingClientMessage;
-        break;
-      }
-
-      if (response.stop_reason === "end_turn") {
-        finalText = extractText(response.content);
-        break;
-      }
+    } catch (err) {
+      const motivo =
+        err instanceof CalendarUnavailable
+          ? "erro_interno:CalendarUnavailable"
+          : `erro_interno:${err instanceof Error ? err.name : "Error"}`;
+      const transfer = await transferToHuman({
+        ...toolCtxBase,
+        motivo,
+        intencao: userText,
+      });
+      return {
+        reply: transfer.clientMessage,
+        muted: false,
+        ferramentas: [...ferramentas, "acionar_handoff"],
+        handoff: true,
+        respostaSemFonte: false,
+      };
     }
 
     if (!finalText && handoffReply) {
@@ -264,7 +363,12 @@ export function createAgent(deps: AgentDeps) {
       finalText = bookingClientMessage;
     }
     if (!finalText) {
-      finalText = config.handoff.mensagem;
+      const transfer = await transferToHuman({
+        ...toolCtxBase,
+        motivo: "erro_interno:resposta_vazia",
+        intencao: userText,
+      });
+      finalText = transfer.clientMessage;
       handoff = true;
       ferramentas.push("acionar_handoff");
     }
@@ -287,6 +391,7 @@ export function createAgent(deps: AgentDeps) {
 
     return {
       reply: finalText,
+      muted: false,
       ferramentas,
       handoff,
       respostaSemFonte,

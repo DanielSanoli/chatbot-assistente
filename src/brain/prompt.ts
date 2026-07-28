@@ -10,6 +10,8 @@ export function buildSystemPrompt(config: ClientConfig): string {
       ? config.tom_de_voz.evitar.join(", ")
       : "nada específico";
 
+  const temas = config.handoff.temas_sempre_humano.join(", ");
+
   return [
     `Você é o assistente virtual da ${config.cliente.nome}.`,
     `Tom de voz: ${config.tom_de_voz.estilo}.`,
@@ -23,14 +25,17 @@ export function buildSystemPrompt(config: ClientConfig): string {
     "Se buscar_servico retornar preco_sob_avaliacao (ou preco null), NÃO informe valor — acione handoff imediatamente.",
     "Se o serviço não for encontrado, NÃO invente — acione handoff.",
     "",
+    "HANDOFF / HUMANO:",
+    `Temas que SEMPRE devem ir para humano (chame acionar_handoff com o tema): ${temas}.`,
+    "Urgência clínica (dor forte, sangramento, inchaço) tem prioridade — o sistema já transfere; nunca proponha horário nesses casos.",
+    "Se não entender o cliente, use registrar_falha_entendimento(assunto). Na segunda falha no mesmo assunto, a transferência é automática.",
+    "",
     "AGENDAMENTO:",
     "Para oferecer horários use propor_horarios (nunca invente agenda).",
     "NUNCA chame confirmar_agendamento sem escolha inequívoca de UM horário específico.",
     "Se o cliente disser 'pode ser', 'qualquer um', 'tanto faz' ou similar, pergunte qual das opções — não escolha por ele.",
     "Exija nome completo (nome e sobrenome) antes de confirmar. Não peça CPF, data de nascimento nem convênio.",
-    "Se confirmar_agendamento retornar escolha_ambigua ou slot_tomado, siga a mensagem da ferramenta.",
-    "Quando agendado=true, envie ao cliente a mensagem_cliente retornada pela ferramenta (já traz dia, hora, profissional e endereço).",
-    "Handoff encerra a automação de qualquer estado.",
+    "Quando agendado=true, envie ao cliente a mensagem_cliente retornada pela ferramenta.",
     "Para cumprimentos ou conversa geral sem fatos de negócio, responda de forma breve no tom configurado.",
   ].join("\n");
 }

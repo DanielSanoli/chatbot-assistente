@@ -10,6 +10,7 @@ import {
   type ProposedSlot,
 } from "../store/conversations.js";
 import { maskPhone } from "../channel/mask.js";
+import { recordDemandaNaoAtendida } from "./handoff.js";
 import { normalizeTerm } from "./normalize.js";
 
 export const PROPOSTO_TTL_MINUTES = 30;
@@ -90,6 +91,20 @@ export function expirePropostoIfNeeded(ctx: BookingContext): boolean {
     return true;
   }
 
+  return false;
+}
+
+/** Preferência explícita por dia/janela que a clínica não atende (ex.: domingo). */
+export function isUnavailableWindowPreference(
+  preferencia: string,
+  config: ClientConfig,
+): boolean {
+  const pref = normalizeTerm(preferencia);
+  const closedDays = ["domingo", "sabado", "segunda", "terca", "quarta", "quinta", "sexta"].filter(
+    (d) => !config.funcionamento.dias.some((x) => normalizeTerm(x) === d),
+  );
+  if (closedDays.some((d) => pref.includes(d))) return true;
+  if (config.agenda.feriados.some((f) => pref.includes(f))) return true;
   return false;
 }
 
@@ -237,11 +252,11 @@ export async function proporHorarios(
   }
 
   const conv = ensureConversation(ctx.store, ctx.waId);
-  if (conv.estado === "HANDOFF") {
+  if (conv.estado === "EM_HUMANO") {
     return {
       ok: false,
-      motivo: "handoff_ativo",
-      mensagem: "Automação encerrada por handoff. Não propor horários.",
+      motivo: "em_humano",
+      mensagem: "Conversa em atendimento humano. Bot silenciado.",
     };
   }
 
@@ -254,17 +269,38 @@ export async function proporHorarios(
   });
 
   if (slots.length === 0) {
+    recordDemandaNaoAtendida({
+      store: ctx.store,
+      waId: ctx.waId,
+      servicoId,
+      janelaDesejada: input.preferencia ?? "janela_padrao_agenda",
+      agora,
+      timezone: ctx.config.cliente.timezone,
+    });
     setConversationState(ctx.store, ctx.waId, "COLETANDO", {
       servicoId,
       nomeCompleto: conv.estado_payload.nomeCompleto,
       preferencia: input.preferencia,
+      intencao: `agendar ${servicoId}`,
     });
     return {
       ok: false,
       motivo: "sem_horarios",
+      demanda_registrada: true,
       mensagem:
-        "Não há horários livres na janela atual. Informe isso ao cliente e ofereça handoff se quiser.",
+        "Não há horários livres na janela atual (demanda_nao_atendida registrada). Informe isso ao cliente e ofereça handoff se quiser.",
     };
+  }
+
+  if (input.preferencia && isUnavailableWindowPreference(input.preferencia, ctx.config)) {
+    recordDemandaNaoAtendida({
+      store: ctx.store,
+      waId: ctx.waId,
+      servicoId,
+      janelaDesejada: input.preferencia,
+      agora,
+      timezone: ctx.config.cliente.timezone,
+    });
   }
 
   const proposed = serializeSlots(slots, servicoId);
@@ -315,12 +351,12 @@ export async function confirmarAgendamento(
   }
 
   const conv = ensureConversation(ctx.store, ctx.waId);
-  if (conv.estado === "HANDOFF") {
+  if (conv.estado === "EM_HUMANO") {
     return {
       ok: false,
-      motivo: "handoff_ativo",
+      motivo: "em_humano",
       agendado: false,
-      mensagem: "Automação encerrada por handoff.",
+      mensagem: "Conversa em atendimento humano. Bot silenciado.",
     };
   }
 
@@ -500,10 +536,13 @@ export async function confirmarAgendamento(
   };
 }
 
+/** @deprecated use transferToHuman — mantido só para compat de imports. */
 export function markHandoffState(ctx: BookingContext, motivo: string): void {
   const conv = getConversation(ctx.store, ctx.waId);
-  setConversationState(ctx.store, ctx.waId, "HANDOFF", {
+  const agora = nowTz(ctx);
+  setConversationState(ctx.store, ctx.waId, "EM_HUMANO", {
     ...(conv?.estado_payload ?? {}),
-    preferencia: motivo,
+    motivoHandoff: motivo,
+    emHumanoDesde: agora.toISO() ?? agora.toString(),
   });
 }

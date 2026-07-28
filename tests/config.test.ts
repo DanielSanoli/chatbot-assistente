@@ -10,7 +10,6 @@ const FIXTURE_ENV: NodeJS.ProcessEnv = {
   WHATSAPP_ACCESS_TOKEN: "token",
   WHATSAPP_VERIFY_TOKEN: "verify",
   GOOGLE_CALENDAR_ID: "primary",
-  GOOGLE_CREDENTIALS_PATH: "./creds.json",
   GOOGLE_CALENDAR_ANA: "ana@example.com",
   GOOGLE_CALENDAR_BRUNO: "bruno@example.com",
   HANDOFF_WHATSAPP: "+5511999999999",
@@ -30,7 +29,6 @@ whatsapp:
 
 google_calendar:
   calendar_id: "\${GOOGLE_CALENDAR_ID}"
-  credentials_path: "\${GOOGLE_CREDENTIALS_PATH}"
 
 funcionamento:
   dias: [segunda, terca, quarta, quinta, sexta]
@@ -40,6 +38,12 @@ funcionamento:
   intervalo_almoco:
     inicio: "12:00"
     fim: "13:00"
+
+agenda:
+  buffer_entre_atendimentos_min: 10
+  antecedencia_minima_horas: 2
+  janela_maxima_dias: 14
+  feriados: ["2026-01-01"]
 
 profissionais:
   - id: dra-ana

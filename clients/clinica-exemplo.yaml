@@ -11,7 +11,6 @@ whatsapp:
 
 google_calendar:
   calendar_id: "${GOOGLE_CALENDAR_ID}"
-  credentials_path: "${GOOGLE_CREDENTIALS_PATH}"
 
 funcionamento:
   dias:
@@ -20,12 +19,27 @@ funcionamento:
     - quarta
     - quinta
     - sexta
+    - sabado
   horario:
     inicio: "08:00"
     fim: "18:00"
+  por_dia:
+    sabado:
+      inicio: "09:00"
+      fim: "13:00"
   intervalo_almoco:
     inicio: "12:00"
     fim: "13:00"
+
+agenda:
+  buffer_entre_atendimentos_min: 10
+  antecedencia_minima_horas: 2
+  janela_maxima_dias: 14
+  passo_grade_min: 15
+  feriados:
+    - "2026-01-01"
+    - "2026-12-25"
+    - "2026-11-20"
 
 profissionais:
   - id: dra-ana

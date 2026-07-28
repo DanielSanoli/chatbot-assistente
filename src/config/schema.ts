@@ -77,13 +77,26 @@ export const WhatsappSchema = z.object({
 
 export const GoogleCalendarSchema = z.object({
   calendar_id: z.string().min(1),
-  credentials_path: z.string().min(1),
 });
 
 export const FuncionamentoSchema = z.object({
   dias: z.array(z.string().min(1)).min(1),
   horario: HorarioSchema,
+  /** Ex.: sábado com expediente mais curto — sobrescreve horario padrão. */
+  por_dia: z.record(HorarioSchema).default({}),
   intervalo_almoco: HorarioSchema.optional(),
+});
+
+export const AgendaSchema = z.object({
+  buffer_entre_atendimentos_min: z.number().int().nonnegative(),
+  antecedencia_minima_horas: z.number().nonnegative(),
+  janela_maxima_dias: z.number().int().positive(),
+  /** Grade de início dos slots (minutos). */
+  passo_grade_min: z.number().int().positive().default(15),
+  /** Datas ISO YYYY-MM-DD no timezone do cliente. */
+  feriados: z
+    .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "feriado deve ser YYYY-MM-DD"))
+    .default([]),
 });
 
 export const LocalSchema = z.object({
@@ -125,6 +138,7 @@ export const ClientConfigSchema = z
     whatsapp: WhatsappSchema,
     google_calendar: GoogleCalendarSchema,
     funcionamento: FuncionamentoSchema,
+    agenda: AgendaSchema,
     profissionais: z.array(ProfissionalSchema).min(1),
     servicos: z.array(ServicoSchema).min(1),
     local: LocalSchema,

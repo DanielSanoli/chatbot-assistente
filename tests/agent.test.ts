@@ -23,7 +23,6 @@ const ENV: NodeJS.ProcessEnv = {
   WHATSAPP_ACCESS_TOKEN: "token",
   WHATSAPP_VERIFY_TOKEN: "verify",
   GOOGLE_CALENDAR_ID: "primary",
-  GOOGLE_CREDENTIALS_PATH: "./creds.json",
   GOOGLE_CALENDAR_ANA: "ana@example.com",
   GOOGLE_CALENDAR_BRUNO: "bruno@example.com",
   HANDOFF_WHATSAPP: "+5511999999999",

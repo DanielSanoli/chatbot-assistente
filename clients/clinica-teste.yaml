@@ -72,6 +72,8 @@ profissionais:
       - avaliacao
       - restauracao
       - aparelho
+      - canal
+      - extracao_siso
     calendario_id: "${GOOGLE_CALENDAR_ANA}"
   # Atende só clareamento: testa o caso em que a agenda de UM profissional
   # está cheia e não há fallback possível.
@@ -140,6 +142,28 @@ servicos:
       - ortodontia
     duracao_min: 30
     preco: 150
+
+  # Especialista: informar/orientar, mas a recepção monta a agenda.
+  - id: canal
+    nome: Tratamento de canal
+    aliases:
+      - canal
+      - endodontia
+      - tratamento de canal
+    duracao_min: 90
+    preco: null
+    agendavel: false
+
+  - id: extracao_siso
+    nome: Extração de siso
+    aliases:
+      - extração de siso
+      - extracao de siso
+      - siso
+      - extrair siso
+    duracao_min: 90
+    preco: null
+    agendavel: false
 
 local:
   endereco: Rua das Acácias, 412

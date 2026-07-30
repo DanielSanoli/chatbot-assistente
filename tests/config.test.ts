@@ -211,6 +211,28 @@ describe("loadConfigFromYaml", () => {
     expect(retorno?.preco).toBeNull();
   });
 
+  it("agendavel default true quando omitido no YAML", () => {
+    const path = writeTempYaml(VALID_YAML);
+    const config = loadConfigFromYaml(path, FIXTURE_ENV);
+    expect(config.servicos.every((s) => s.agendavel === true)).toBe(true);
+  });
+
+  it("aceita agendavel: false no serviço", () => {
+    const path = withPatch((yaml) =>
+      yaml.replace(
+        "duracao_min: 40\n    preco: 280",
+        "duracao_min: 40\n    preco: 280\n    agendavel: false",
+      ),
+    );
+    const config = loadConfigFromYaml(path, FIXTURE_ENV);
+    expect(config.servicos.find((s) => s.id === "consulta")?.agendavel).toBe(
+      false,
+    );
+    expect(config.servicos.find((s) => s.id === "retorno")?.agendavel).toBe(
+      true,
+    );
+  });
+
   it("ConfigService singleton expõe a config tipada", () => {
     const path = writeTempYaml(VALID_YAML);
     ConfigService.load(path, FIXTURE_ENV);

@@ -57,18 +57,21 @@ type FakeCalendar = CalendarClient & {
     calendarId: string;
   }>;
   busyById: Record<string, BusyPeriod[]>;
+  queryBusyCalls: number;
 };
 
 function fakeCalendar(
   busyById: Record<string, BusyPeriod[]> = {},
 ): FakeCalendar {
   const created: FakeCalendar["created"] = [];
-  return {
+  const calendar: FakeCalendar = {
     name: "google_calendar",
     ready: true,
     busyById,
     created,
+    queryBusyCalls: 0,
     async queryBusy({ calendarIds }) {
+      calendar.queryBusyCalls += 1;
       const map = new Map<string, BusyPeriod[]>();
       for (const id of calendarIds) {
         map.set(id, busyById[id] ?? []);
@@ -85,6 +88,7 @@ function fakeCalendar(
       return { id: `evt-${created.length}` };
     },
   };
+  return calendar;
 }
 
 function ctx(
@@ -259,6 +263,86 @@ describe("agendamento com confirmação", () => {
       );
     }
 
+    expect(calendar.created).toHaveLength(0);
+  });
+});
+
+describe("serviço não agendável", () => {
+  it("proporHorarios com agendavel=false não chama calendar.queryBusy", async () => {
+    const { store, config } = setup();
+    const canal = config.servicos.find((s) => s.id === "canal");
+    expect(canal).toBeDefined();
+    canal!.agendavel = false;
+
+    const calendar = fakeCalendar();
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+    const waId = "5511888000101";
+
+    const result = await proporHorarios(
+      ctx(store, config, calendar, waId, agora),
+      { servicoId: "canal" },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.motivo).toBe("servico_nao_agendavel");
+    expect(String(result.mensagem)).toMatch(/recepção monta|acionar_handoff/i);
+    expect(calendar.queryBusyCalls).toBe(0);
+    expect(calendar.created).toHaveLength(0);
+
+    const event = store.db
+      .prepare("SELECT tipo, payload_json FROM events WHERE tipo = ?")
+      .get("booking.servico_nao_agendavel") as {
+      tipo: string;
+      payload_json: string;
+    };
+    expect(event).toBeDefined();
+    expect(JSON.parse(event.payload_json).servicoId).toBe("canal");
+  });
+
+  it("serviços agendáveis atuais continuam propondo horários", async () => {
+    const { store, config } = setup();
+    const limpeza = config.servicos.find((s) => s.id === "limpeza");
+    expect(limpeza?.agendavel).toBe(true);
+
+    const calendar = fakeCalendar();
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+    const waId = "5511888000102";
+
+    const proposta = await proporHorarios(
+      ctx(store, config, calendar, waId, agora),
+      { servicoId: "limpeza" },
+    );
+
+    expect(proposta.ok).toBe(true);
+    expect((proposta.slots as unknown[])?.length).toBeGreaterThan(0);
+    expect(calendar.queryBusyCalls).toBeGreaterThan(0);
+  });
+
+  it("confirmarAgendamento bloqueia se serviço virou não agendável", async () => {
+    const { store, config } = setup();
+    const calendar = fakeCalendar();
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+    const waId = "5511888000103";
+
+    const proposta = await proporHorarios(
+      ctx(store, config, calendar, waId, agora),
+      { servicoId: "limpeza" },
+    );
+    expect(proposta.ok).toBe(true);
+    const busyCallsAposProposta = calendar.queryBusyCalls;
+
+    const limpeza = config.servicos.find((s) => s.id === "limpeza")!;
+    limpeza.agendavel = false;
+
+    const result = await confirmarAgendamento(
+      ctx(store, config, calendar, waId, agora),
+      { slotEscolhido: "1", nomeCompleto: "Maria Silva" },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.agendado).toBe(false);
+    expect(result.motivo).toBe("servico_nao_agendavel");
+    expect(calendar.queryBusyCalls).toBe(busyCallsAposProposta);
     expect(calendar.created).toHaveLength(0);
   });
 });

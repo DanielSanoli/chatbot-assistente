@@ -48,6 +48,8 @@ export const ServicoSchema = z.object({
     .positive("duracao_min deve ser maior que 0"),
   /** null = não informar preço; transferir no handoff */
   preco: z.number().nonnegative().nullable(),
+  /** false = informar/orientar, mas não marcar pelo assistente */
+  agendavel: z.boolean().default(true),
 });
 
 export const ProfissionalSchema = z.object({

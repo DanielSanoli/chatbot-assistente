@@ -251,6 +251,18 @@ export async function proporHorarios(
     };
   }
 
+  if (servico.agendavel === false) {
+    logEvent(ctx.store, "booking.servico_nao_agendavel", {
+      wa_id_masked: maskPhone(ctx.waId),
+      servicoId,
+    });
+    return {
+      ok: false,
+      motivo: "servico_nao_agendavel",
+      mensagem: `${servico.nome} não é agendado pelo assistente. Informe o cliente de que a recepção monta esse horário e acione acionar_handoff.`,
+    };
+  }
+
   const conv = ensureConversation(ctx.store, ctx.waId);
   if (conv.estado === "EM_HUMANO") {
     return {
@@ -358,6 +370,27 @@ export async function confirmarAgendamento(
       agendado: false,
       mensagem: "Conversa em atendimento humano. Bot silenciado.",
     };
+  }
+
+  const servicoIdProposta =
+    conv.estado_payload.servicoId ??
+    conv.estado_payload.slots?.[0]?.servicoId;
+  if (servicoIdProposta) {
+    const servicoProposta = ctx.config.servicos.find(
+      (s) => s.id === servicoIdProposta,
+    );
+    if (servicoProposta && servicoProposta.agendavel === false) {
+      logEvent(ctx.store, "booking.servico_nao_agendavel", {
+        wa_id_masked: maskPhone(ctx.waId),
+        servicoId: servicoIdProposta,
+      });
+      return {
+        ok: false,
+        motivo: "servico_nao_agendavel",
+        agendado: false,
+        mensagem: `${servicoProposta.nome} não é agendado pelo assistente. Informe o cliente de que a recepção monta esse horário e acione acionar_handoff.`,
+      };
+    }
   }
 
   const slotsPropostos = conv.estado_payload.slots;

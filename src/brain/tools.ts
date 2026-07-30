@@ -46,6 +46,7 @@ export type BuscarServicoResult =
       preco: number | null;
       preco_status: "informado" | typeof PRECO_SOB_AVALIACAO;
       marcador?: typeof PRECO_SOB_AVALIACAO;
+      agendavel: boolean;
     }
   | {
       encontrado: false;
@@ -95,6 +96,7 @@ export function buscarServico(
       preco: null,
       preco_status: PRECO_SOB_AVALIACAO,
       marcador: PRECO_SOB_AVALIACAO,
+      agendavel: servico.agendavel,
     };
   }
 
@@ -105,6 +107,7 @@ export function buscarServico(
     duracao_min: servico.duracao_min,
     preco: servico.preco,
     preco_status: "informado",
+    agendavel: servico.agendavel,
   };
 }
 
@@ -114,6 +117,7 @@ export function listarServicos(config: ClientConfig) {
       id: s.id,
       nome: s.nome,
       aliases: s.aliases,
+      agendavel: s.agendavel,
     })),
   };
 }
@@ -318,7 +322,7 @@ export const ANTHROPIC_TOOLS = [
   {
     name: "propor_horarios",
     description:
-      "Propõe 2–3 horários livres para um serviço (lê a agenda). Use quando o cliente quiser agendar. Nunca invente horários. NÃO use se houver urgência clínica (dor forte, sangramento, inchaço).",
+      "Propõe 2–3 horários livres para um serviço (lê a agenda). Use quando o cliente quiser agendar. Nunca invente horários. Não chame para serviços com agendavel=false — acione acionar_handoff. NÃO use se houver urgência clínica (dor forte, sangramento, inchaço).",
     input_schema: {
       type: "object" as const,
       properties: {

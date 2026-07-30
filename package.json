@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "conversas": "tsx src/reports/cli-conversas.ts",
-    "relatorio": "tsx src/reports/cli-relatorio.ts"
+    "relatorio": "tsx src/reports/cli-relatorio.ts",
+    "expurgo": "tsx src/jobs/cli-purge.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

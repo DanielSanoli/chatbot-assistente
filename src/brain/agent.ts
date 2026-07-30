@@ -20,6 +20,11 @@ import {
   isMutedEmHumano,
   transferToHuman,
 } from "./handoff.js";
+import {
+  DELETE_CONFIRMATION_MESSAGE,
+  deleteUserData,
+  detectDeleteRequest,
+} from "./privacy.js";
 import { buildSystemPrompt } from "./prompt.js";
 import {
   ANTHROPIC_TOOLS,
@@ -130,6 +135,24 @@ export function createAgent(deps: AgentDeps) {
     waId: string,
     userText: string,
   ): Promise<AgentTurnResult> {
+    // LGPD — direito de exclusão. Precede TUDO, inclusive isMutedEmHumano:
+    // uma conversa em handoff fica muda por 12h, e o paciente não pode ficar
+    // meio dia sem conseguir exercer o direito. Também não é caso de handoff.
+    if (detectDeleteRequest(userText)) {
+      const removed = deleteUserData(deps.store, waId);
+      logEvent(deps.store, "lgpd.exclusao_solicitada", {
+        wa_id_masked: maskPhone(waId),
+        mensagens_removidas: removed.mensagens,
+      });
+      return {
+        reply: DELETE_CONFIRMATION_MESSAGE,
+        muted: false,
+        ferramentas: [],
+        handoff: false,
+        respostaSemFonte: false,
+      };
+    }
+
     const config = getConfig();
     const nowDate = deps.now?.() ?? new Date();
     const agora = DateTime.fromJSDate(nowDate).setZone(config.cliente.timezone);

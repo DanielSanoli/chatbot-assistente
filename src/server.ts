@@ -7,6 +7,7 @@ import { createWhatsappChannel } from "./channel/index.js";
 import { createGoogleCalendarClient } from "./calendar/index.js";
 import { createBrain, transferToHuman } from "./brain/index.js";
 import { openStore, logEvent } from "./store/index.js";
+import { purgeFromConfig } from "./jobs/purge.js";
 import { maskPhone } from "./channel/mask.js";
 import { DateTime } from "luxon";
 
@@ -161,7 +162,29 @@ async function main(): Promise<void> {
     timezone: config.cliente.timezone,
   }));
 
+  // Expurgo LGPD: uma vez no boot e a cada 24h.
+  const runPurge = () => {
+    try {
+      const result = purgeFromConfig(store, config);
+      if (result.conversas > 0) {
+        app.log.info(
+          { conversas: result.conversas, mensagens: result.mensagens },
+          "expurgo lgpd concluído",
+        );
+      }
+    } catch (err) {
+      app.log.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "expurgo lgpd falhou",
+      );
+    }
+  };
+  runPurge();
+  const purgeTimer = setInterval(runPurge, 24 * 60 * 60 * 1000);
+  purgeTimer.unref();
+
   const shutdown = async () => {
+    clearInterval(purgeTimer);
     await app.close();
     store.close();
     process.exit(0);

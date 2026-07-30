@@ -31,6 +31,12 @@ export {
   clientHandoffMessage,
   buildHumanSummary,
 } from "./handoff.js";
+export {
+  detectDeleteRequest,
+  deleteUserData,
+  DELETE_CONFIRMATION_MESSAGE,
+  type DeleteUserDataResult,
+} from "./privacy.js";
 export type { ClaudeClient } from "./claude.js";
 
 export type BrainDeps = {

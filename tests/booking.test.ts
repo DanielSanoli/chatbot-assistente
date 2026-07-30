@@ -52,6 +52,7 @@ function setup() {
 type FakeCalendar = CalendarClient & {
   created: Array<{
     title: string;
+    description?: string;
     inicio: DateTime;
     fim: DateTime;
     calendarId: string;
@@ -81,6 +82,7 @@ function fakeCalendar(
     async createEvent(input) {
       created.push({
         title: input.title,
+        description: input.description,
         inicio: input.inicio,
         fim: input.fim,
         calendarId: input.calendarId,
@@ -217,7 +219,7 @@ describe("agendamento com confirmação", () => {
     expect(getConversation(store, waId)?.estado).toBe("LIVRE");
   });
 
-  it("evento criado tem duração correta do serviço e título com nome/telefone", async () => {
+  it("evento criado tem duração correta e título só com serviço/nome (sem telefone)", async () => {
     const { store, config } = setup();
     const calendar = fakeCalendar();
     const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
@@ -238,9 +240,11 @@ describe("agendamento com confirmação", () => {
     expect(calendar.created).toHaveLength(1);
     const event = calendar.created[0]!;
     expect(event.fim.diff(event.inicio, "minutes").minutes).toBe(duracao);
-    expect(event.title).toContain("Limpeza dental");
-    expect(event.title).toContain("Maria Silva");
-    expect(event.title).toContain(waId);
+    expect(event.title).toBe("Limpeza dental — Maria Silva");
+    expect(event.title).not.toContain(waId);
+    expect(event.title).not.toMatch(/\d{8,}/);
+    expect(event.description).toContain(`Telefone: ${waId}`);
+    expect(event.description).toMatch(/Profissional:/);
     expect(getConversation(store, waId)?.estado).toBe("CONFIRMADO");
     expect(String(result.mensagem_cliente)).toMatch(/segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado/i);
     expect(String(result.mensagem_cliente)).toContain("Rua das Flores");

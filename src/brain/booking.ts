@@ -526,14 +526,14 @@ export async function confirmarAgendamento(
   const duracaoOk =
     Math.abs(fim.diff(inicio, "minutes").minutes - servico.duracao_min) < 0.5;
 
-  const title = `${servico.nome} — ${nome} (${ctx.waId})`;
+  const title = `${servico.nome} — ${nome}`;
   const created = await ctx.calendar.createEvent({
     calendarId: slot.calendarioId,
     title,
     inicio,
     fim: duracaoOk ? fim : fimEsperado,
     timeZone: tz,
-    description: `Agendado via WhatsApp. Telefone: ${ctx.waId}`,
+    description: `Agendado via WhatsApp.\nTelefone: ${ctx.waId}\nProfissional: ${slot.profissionalNome}`,
   });
 
   const mensagem = formatConfirmationMessage(ctx, slot, nome, servico.nome);

@@ -83,6 +83,18 @@ function eventsOfType(store: Store, tipo: string): unknown[] {
     .map((row) => JSON.parse((row as { payload_json: string }).payload_json));
 }
 
+/** Corpo da resposta sem o prefixo LGPD (se presente). */
+function replyBody(
+  reply: string | null | undefined,
+  aviso: string,
+): string {
+  if (!reply) return "";
+  if (reply.startsWith(aviso)) {
+    return reply.slice(aviso.length).replace(/^\n\n/, "");
+  }
+  return reply;
+}
+
 describe("system prompt", () => {
   it("não contém preços nem horários de funcionamento", () => {
     const { config } = setup();
@@ -140,13 +152,14 @@ describe("agent conversation", () => {
 
     const turn = await agent.handleUserMessage(waId, "quanto custa canal");
     expect(turn.handoff).toBe(true);
+    const body = replyBody(turn.reply, config.privacidade.aviso_primeira_mensagem);
     expect([config.handoff.mensagem, config.handoff.fora_do_horario]).toContain(
-      turn.reply,
+      body,
     );
     expect(turn.ferramentas).toEqual(
       expect.arrayContaining(["buscar_servico", "acionar_handoff"]),
     );
-    expect(turn.reply ?? "").not.toMatch(/\d{2,}/);
+    expect(body).not.toMatch(/\d{2,}/);
     expect(eventsOfType(store, "brain.turno")[0]).toMatchObject({
       handoff: true,
     });
@@ -169,10 +182,11 @@ describe("agent conversation", () => {
 
     const turn = await agent.handleUserMessage(waId, "vocês fazem implante");
     expect(turn.handoff).toBe(true);
+    const body = replyBody(turn.reply, config.privacidade.aviso_primeira_mensagem);
     expect([config.handoff.mensagem, config.handoff.fora_do_horario]).toContain(
-      turn.reply,
+      body,
     );
-    expect((turn.reply ?? "").toLowerCase()).not.toContain("implante dentário");
+    expect(body.toLowerCase()).not.toContain("implante dentário");
     expect(turn.ferramentas).toContain("acionar_handoff");
   });
 
@@ -351,7 +365,8 @@ describe("agent conversation", () => {
       const turn = await agent.handleUserMessage(waId, pergunta);
 
       // Nenhum valor numérico de preço fora do YAML.
-      const mentioned = (turn.reply ?? "").match(/R\$\s*(\d+(?:[.,]\d+)?)/gi) ?? [];
+      const body = replyBody(turn.reply, config.privacidade.aviso_primeira_mensagem);
+      const mentioned = body.match(/R\$\s*(\d+(?:[.,]\d+)?)/gi) ?? [];
       for (const hit of mentioned) {
         const digits = hit.replace(/[^\d]/g, "");
         expect(precosPermitidos.has(digits)).toBe(true);
@@ -376,7 +391,7 @@ describe("agent conversation", () => {
         expect([
           config.handoff.mensagem,
           config.handoff.fora_do_horario,
-        ]).toContain(turn.reply);
+        ]).toContain(body);
       }
     }
   });

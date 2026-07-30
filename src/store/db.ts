@@ -44,6 +44,10 @@ function migrateConversations(db: Database.Database): void {
     );
   }
 
+  if (!names.has("aviso_lgpd_em")) {
+    db.exec(`ALTER TABLE conversations ADD COLUMN aviso_lgpd_em TEXT`);
+  }
+
   db.exec(
     `UPDATE conversations
      SET estado = 'LIVRE'

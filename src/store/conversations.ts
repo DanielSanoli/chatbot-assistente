@@ -150,3 +150,23 @@ export function patchConversationPayload(
     nextPayload,
   );
 }
+
+/** True se o paciente ainda não recebeu o aviso LGPD (marcador durável por wa_id). */
+export function precisaEnviarAvisoLgpd(store: Store, waId: string): boolean {
+  const row = store.db
+    .prepare(`SELECT aviso_lgpd_em FROM conversations WHERE wa_id = ?`)
+    .get(waId) as { aviso_lgpd_em: string | null } | undefined;
+  if (!row) return true;
+  return row.aviso_lgpd_em == null || row.aviso_lgpd_em === "";
+}
+
+export function marcarAvisoLgpdEnviado(store: Store, waId: string): void {
+  ensureConversation(store, waId);
+  store.db
+    .prepare(
+      `UPDATE conversations
+       SET aviso_lgpd_em = datetime('now')
+       WHERE wa_id = ? AND (aviso_lgpd_em IS NULL OR aviso_lgpd_em = '')`,
+    )
+    .run(waId);
+}

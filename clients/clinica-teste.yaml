@@ -233,3 +233,10 @@ handoff:
   mensagem: Essa eu prefiro não responder por conta própria para não te passar informação errada. Já avisei a equipe e alguém te responde por aqui.
   fora_do_horario: Nossa equipe atende de segunda a sexta das 9h às 19h, e sábado até as 13h. Registrei seu pedido e assim que abrirmos alguém te responde.
   silencio_em_humano_horas: 12
+
+privacidade:
+  aviso_primeira_mensagem: >
+    Aviso de privacidade: guardamos nesta conversa seu nome e o procedimento
+    de interesse para organizar o atendimento. Os dados ficam retidos por até
+    180 dias. Para solicitar a exclusão, envie "excluir meus dados".
+  retencao_dias: 180

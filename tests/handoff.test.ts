@@ -130,7 +130,10 @@ describe("quatro gatilhos de handoff", () => {
 
     const turn = await agent.handleUserMessage(waId, "quero falar com atendente");
     expect(turn.handoff).toBe(true);
-    expect(turn.reply).toBe(config.handoff.mensagem);
+    expect(turn.reply).toContain(config.handoff.mensagem);
+    expect(turn.reply?.startsWith(config.privacidade.aviso_primeira_mensagem)).toBe(
+      true,
+    );
     expect(getConversation(store, waId)?.estado).toBe("EM_HUMANO");
     expect(humanMsgs).toHaveLength(1);
     expect(humanMsgs[0]?.to).toBe(config.handoff.numero_humano);
@@ -286,7 +289,10 @@ describe("EM_HUMANO mute e urgência", () => {
 
     const turn = await agent.handleUserMessage(waId, "estou com muita dor");
     expect(turn.handoff).toBe(true);
-    expect(turn.reply).toBe(config.handoff.mensagem);
+    expect(turn.reply).toContain(config.handoff.mensagem);
+    expect(turn.reply?.startsWith(config.privacidade.aviso_primeira_mensagem)).toBe(
+      true,
+    );
     expect(claude).not.toHaveBeenCalled();
     expect(humanMsgs[0]).toMatch(/urgencia_clinica|muita dor/i);
     expect(getConversation(store, waId)?.estado).toBe("EM_HUMANO");

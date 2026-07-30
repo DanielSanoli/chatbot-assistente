@@ -15,6 +15,8 @@ export {
   getConversation,
   setConversationState,
   patchConversationPayload,
+  precisaEnviarAvisoLgpd,
+  marcarAvisoLgpdEnviado,
   CONVERSATION_STATES,
   type ConversationState,
   type ConversationRow,

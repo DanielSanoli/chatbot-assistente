@@ -86,6 +86,12 @@ handoff:
   numero_humano: "\${HANDOFF_WHATSAPP}"
   mensagem: Transferindo para a recepção.
   fora_do_horario: Fora do horário; a recepção retorna depois.
+
+privacidade:
+  aviso_primeira_mensagem: >
+    Aviso de privacidade: guardamos nome e procedimento de interesse para o
+    atendimento. Retenção de até 180 dias. Para excluir, envie "excluir meus dados".
+  retencao_dias: 180
 `;
 
 function writeTempYaml(contents: string): string {
@@ -237,5 +243,19 @@ describe("loadConfigFromYaml", () => {
     const path = writeTempYaml(VALID_YAML);
     ConfigService.load(path, FIXTURE_ENV);
     expect(ConfigService.get().cliente.nome).toBe("Clínica Exemplo");
+  });
+
+  it("falha no boot se a chave privacidade estiver ausente", () => {
+    const path = withPatch((yaml) =>
+      yaml.replace(/\nprivacidade:[\s\S]*$/, "\n"),
+    );
+
+    expect(() => loadConfigFromYaml(path, FIXTURE_ENV)).toThrow(ConfigLoadError);
+    try {
+      loadConfigFromYaml(path, FIXTURE_ENV);
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigLoadError);
+      expect((err as ConfigLoadError).message).toMatch(/privacidade/i);
+    }
   });
 });

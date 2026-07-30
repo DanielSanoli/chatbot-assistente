@@ -5,7 +5,12 @@ import { CalendarUnavailable } from "../calendar/google.js";
 import { ConfigService } from "../config/index.js";
 import type { ClientConfig } from "../config/schema.js";
 import { maskPhone } from "../channel/mask.js";
-import { logEvent, type Store } from "../store/index.js";
+import {
+  logEvent,
+  marcarAvisoLgpdEnviado,
+  precisaEnviarAvisoLgpd,
+  type Store,
+} from "../store/index.js";
 import { getConversationWindow } from "../store/history.js";
 import { expirePropostoIfNeeded } from "./booking.js";
 import type { ClaudeClient } from "./claude.js";
@@ -153,6 +158,18 @@ export function createAgent(deps: AgentDeps) {
       };
     }
 
+    const withLgpdAviso = (reply: string): string => {
+      if (!precisaEnviarAvisoLgpd(deps.store, waId)) {
+        return reply;
+      }
+      const prefixed = `${config.privacidade.aviso_primeira_mensagem}\n\n${reply}`;
+      marcarAvisoLgpdEnviado(deps.store, waId);
+      logEvent(deps.store, "lgpd.aviso_enviado", {
+        wa_id_masked: maskPhone(waId),
+      });
+      return prefixed;
+    };
+
     // Urgência clínica — prioridade máxima, sem agendar.
     if (detectUrgency(userText)) {
       const transfer = await transferToHuman({
@@ -161,7 +178,7 @@ export function createAgent(deps: AgentDeps) {
         intencao: userText,
       });
       return {
-        reply: transfer.clientMessage,
+        reply: withLgpdAviso(transfer.clientMessage),
         muted: false,
         ferramentas: ["acionar_handoff"],
         handoff: true,
@@ -181,7 +198,7 @@ export function createAgent(deps: AgentDeps) {
         intencao: userText,
       });
       return {
-        reply: transfer.clientMessage,
+        reply: withLgpdAviso(transfer.clientMessage),
         muted: false,
         ferramentas: ["acionar_handoff"],
         handoff: true,
@@ -271,7 +288,7 @@ export function createAgent(deps: AgentDeps) {
               intencao: userText,
             });
             return {
-              reply: transfer.clientMessage,
+              reply: withLgpdAviso(transfer.clientMessage),
               muted: false,
               ferramentas: [...ferramentas, "acionar_handoff"],
               handoff: true,
@@ -348,7 +365,7 @@ export function createAgent(deps: AgentDeps) {
         intencao: userText,
       });
       return {
-        reply: transfer.clientMessage,
+        reply: withLgpdAviso(transfer.clientMessage),
         muted: false,
         ferramentas: [...ferramentas, "acionar_handoff"],
         handoff: true,
@@ -391,7 +408,7 @@ export function createAgent(deps: AgentDeps) {
     }
 
     return {
-      reply: finalText,
+      reply: withLgpdAviso(finalText),
       muted: false,
       ferramentas,
       handoff,

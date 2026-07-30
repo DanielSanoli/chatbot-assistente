@@ -141,6 +141,11 @@ export const HandoffSchema = z.object({
   silencio_em_humano_horas: z.number().positive().default(12),
 });
 
+export const PrivacidadeSchema = z.object({
+  aviso_primeira_mensagem: z.string().min(1),
+  retencao_dias: z.number().int().positive().default(180),
+});
+
 export const ClientConfigSchema = z
   .object({
     cliente: ClienteSchema,
@@ -155,6 +160,7 @@ export const ClientConfigSchema = z
     faq: z.array(FaqItemSchema).default([]),
     tom_de_voz: TomDeVozSchema,
     handoff: HandoffSchema,
+    privacidade: PrivacidadeSchema,
   })
   .superRefine((config, ctx) => {
     const servicoIds = new Set(config.servicos.map((s) => s.id));

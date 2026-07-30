@@ -136,3 +136,10 @@ handoff:
   mensagem: Vou te transferir para a recepção agora. Em instantes alguém te atende por aqui.
   fora_do_horario: No momento estamos fora do horário de atendimento. Vou registrar seu pedido e a recepção retorna assim que possível.
   silencio_em_humano_horas: 12
+
+privacidade:
+  aviso_primeira_mensagem: >
+    Aviso de privacidade: guardamos nesta conversa seu nome e o procedimento
+    de interesse para organizar o atendimento. Os dados ficam retidos por até
+    180 dias. Para solicitar a exclusão, envie "excluir meus dados".
+  retencao_dias: 180

@@ -1,0 +1,211 @@
+# =============================================================================
+# Config de TESTE — clínica fictícia
+# Validada contra src/config/schema.ts. Deliberadamente cheia de armadilhas.
+#
+# Uso:
+#   CLIENT_CONFIG_PATH=./clients/clinica-teste.yaml npm run dev
+#
+# Diferenças em relação à clinica-exemplo.yaml, todas de propósito:
+#   - antecedencia_minima_horas: 3 (em vez de 2) — borda mais fácil de ver
+#   - janela_maxima_dias: 30 — permite testar "tem em setembro?"
+#   - feriado DENTRO da janela — a exemplo só tem feriados distantes
+#   - dois serviços com preco: null — o caminho de handoff é o mais importante
+#   - sábado 09:00–13:00 com almoço que NÃO se aplica (fecha antes)
+#   - um profissional que atende só um serviço — testa fallback de agenda
+# =============================================================================
+
+cliente:
+  id: clinica-teste
+  nome: Clínica Odonto Bem Estar
+  timezone: America/Sao_Paulo
+
+whatsapp:
+  phone_number_id: "${WHATSAPP_PHONE_NUMBER_ID}"
+  access_token: "${WHATSAPP_ACCESS_TOKEN}"
+  verify_token: "${WHATSAPP_VERIFY_TOKEN}"
+  webhook_path: /webhook
+
+google_calendar:
+  calendar_id: "${GOOGLE_CALENDAR_ID}"
+
+funcionamento:
+  dias:
+    - segunda
+    - terca
+    - quarta
+    - quinta
+    - sexta
+    - sabado
+  horario:
+    inicio: "09:00"
+    fim: "19:00"
+  por_dia:
+    sexta:
+      inicio: "09:00"
+      fim: "18:00"
+    sabado:
+      inicio: "09:00"
+      fim: "13:00"
+  intervalo_almoco:
+    inicio: "13:00"
+    fim: "14:00"
+
+agenda:
+  buffer_entre_atendimentos_min: 10
+  antecedencia_minima_horas: 3
+  janela_maxima_dias: 30
+  passo_grade_min: 15
+  feriados:
+    # Um feriado DENTRO da janela de 30 dias — sem isso o caminho de feriado
+    # nunca é exercitado num teste manual.
+    - "2026-08-12"
+    - "2026-09-07"
+    - "2026-10-12"
+    - "2026-11-02"
+    - "2026-12-25"
+
+profissionais:
+  - id: dra-ana
+    nome: Dra. Ana Silva
+    servicos:
+      - limpeza
+      - avaliacao
+      - restauracao
+      - aparelho
+    calendario_id: "${GOOGLE_CALENDAR_ANA}"
+  # Atende só clareamento: testa o caso em que a agenda de UM profissional
+  # está cheia e não há fallback possível.
+  - id: dr-bruno
+    nome: Dr. Bruno Costa
+    servicos:
+      - clareamento
+    calendario_id: "${GOOGLE_CALENDAR_BRUNO}"
+
+servicos:
+  - id: limpeza
+    nome: Limpeza dental
+    aliases:
+      - limpeza
+      - profilaxia
+      - tártaro
+      - tartaro
+      - tirar tártaro
+      - higienização
+    duracao_min: 45
+    preco: 180
+
+  - id: avaliacao
+    nome: Avaliação inicial
+    aliases:
+      - avaliação
+      - avaliacao
+      - primeira consulta
+      - orçamento
+      - orcamento
+    duracao_min: 30
+    # Zero é diferente de null: aqui o bot PODE informar (é grátis).
+    preco: 0
+
+  - id: clareamento
+    nome: Clareamento dental
+    aliases:
+      - clareamento
+      - branqueamento
+      - clarear os dentes
+    duracao_min: 60
+    preco: 890
+
+  # ARMADILHA CENTRAL: preço depende da extensão. Perguntar "quanto custa?"
+  # tem que virar handoff, nunca um número. Qualquer valor na resposta =
+  # evento resposta_sem_fonte = incidente P1.
+  - id: restauracao
+    nome: Restauração em resina
+    aliases:
+      - restauração
+      - restauracao
+      - obturação
+      - obturacao
+      - cárie
+      - carie
+      - resina
+    duracao_min: 60
+    preco: null
+
+  - id: aparelho
+    nome: Manutenção de aparelho ortodôntico
+    aliases:
+      - aparelho
+      - manutenção
+      - manutencao
+      - ortodontia
+    duracao_min: 30
+    preco: 150
+
+local:
+  endereco: Rua das Acácias, 412
+  bairro: Jardim Paulista
+  cidade: São Paulo
+  estado: SP
+  cep: "01415-002"
+  complemento: Sala 07
+  referencia: Prédio comercial em frente à praça, entrada pela lateral
+  estacionamento: Estacionamento conveniado no próprio prédio. R$ 12 pelas duas primeiras horas, validando o ticket na recepção.
+
+pagamento:
+  formas:
+    - pix
+    - cartao de debito
+    - cartao de credito
+    - dinheiro
+  # ARMADILHA: convênio parcial. O bot não pode dizer "aceitamos convênio"
+  # genericamente nem negar para um plano fora da lista.
+  instrucoes: Parcelamento em até 6x sem juros no crédito para valores acima de R$ 300. Convênios aceitos nesta unidade, Amil Dental, Bradesco Dental e SulAmérica Odonto. A cobertura varia por plano e por procedimento, então a recepção confirma antes do atendimento. Planos fora dessa lista precisam ser confirmados com a recepção.
+
+faq:
+  - pergunta: Como remarcar ou cancelar uma consulta?
+    resposta: Peça a remarcação ou o cancelamento por aqui e a recepção resolve, de preferência com 24h de antecedência.
+  - pergunta: Preciso chegar adiantado?
+    resposta: Chegue com 10 minutos de antecedência para o cadastro.
+  - pergunta: Vocês fazem canal ou extração de siso?
+    resposta: Esses procedimentos são feitos por especialista e a agenda é montada pela recepção após uma avaliação com raio-x.
+  - pergunta: O clareamento pode ser feito na primeira visita?
+    resposta: O clareamento exige uma avaliação prévia. A avaliação é sem custo e leva 30 minutos.
+
+tom_de_voz:
+  estilo: profissional e acolhedor
+  linguagem: pt-BR
+  evitar:
+    - gírias
+    - promessas médicas
+    - diagnósticos
+    - linguagem de vendas
+
+handoff:
+  gatilhos_explicitos:
+    - falar com humano
+    - falar com atendente
+    - quero um atendente
+    - pessoa de verdade
+    - atendente
+    - falar com alguém
+    - falar com a recepção
+  temas_sempre_humano:
+    - reclamacao
+    - cobranca
+    - processo
+    - assedio
+    - remarcacao
+    - cancelamento
+    - convenio_nao_listado
+    - documento_fiscal
+  gatilhos:
+    - preco_nao_informado
+    - servico_inexistente
+    - emergencia
+    - urgencia_clinica
+    - falha_entendimento
+    - erro_interno
+  numero_humano: "${HANDOFF_WHATSAPP}"
+  mensagem: Essa eu prefiro não responder por conta própria para não te passar informação errada. Já avisei a equipe e alguém te responde por aqui.
+  fora_do_horario: Nossa equipe atende de segunda a sexta das 9h às 19h, e sábado até as 13h. Registrei seu pedido e assim que abrirmos alguém te responde.
+  silencio_em_humano_horas: 12

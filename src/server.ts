@@ -99,6 +99,7 @@ async function main(): Promise<void> {
     accessToken: config.whatsapp.access_token,
     verifyToken: waVerifyToken,
     appSecret: waAppSecret,
+    graphApiBaseUrl: process.env.GRAPH_API_BASE,
     logger: {
       info: (obj, msg) => app.log.info(obj, msg),
       warn: (obj, msg) => app.log.warn(obj, msg),

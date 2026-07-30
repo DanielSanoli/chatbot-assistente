@@ -348,6 +348,59 @@ describe("processamento inbound", () => {
     expect(countMessagesByWaMessageId(store, "wamid.txt")).toBe(1);
     store.close();
   });
+
+  it("sendText usa graphApiBaseUrl customizado (ex.: localhost de captura)", async () => {
+    const store = tempStore();
+    const fetchFn = vi.fn(async () =>
+      new Response(JSON.stringify({ messages: [{ id: "out-local" }] }), {
+        status: 200,
+      }),
+    );
+
+    const channel = createWhatsappChannel({
+      store,
+      phoneNumberId: "phone-local",
+      accessToken: "token",
+      verifyToken: VERIFY_TOKEN,
+      appSecret: APP_SECRET,
+      fetchFn,
+      graphApiBaseUrl: "http://localhost:4000",
+    });
+
+    await channel.sendText("5511999998888", "ping");
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [url] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://localhost:4000/phone-local/messages");
+    store.close();
+  });
+
+  it("sendText sem graphApiBaseUrl usa a Graph oficial", async () => {
+    const store = tempStore();
+    const fetchFn = vi.fn(async () =>
+      new Response(JSON.stringify({ messages: [{ id: "out-official" }] }), {
+        status: 200,
+      }),
+    );
+
+    const channel = createWhatsappChannel({
+      store,
+      phoneNumberId: "phone-official",
+      accessToken: "token",
+      verifyToken: VERIFY_TOKEN,
+      appSecret: APP_SECRET,
+      fetchFn,
+    });
+
+    await channel.sendText("5511999998888", "ping");
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [url] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(
+      "https://graph.facebook.com/v21.0/phone-official/messages",
+    );
+    store.close();
+  });
 });
 
 describe("sendText retry", () => {

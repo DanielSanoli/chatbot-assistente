@@ -59,17 +59,20 @@ type FakeCalendar = CalendarClient & {
   }>;
   busyById: Record<string, BusyPeriod[]>;
   queryBusyCalls: number;
+  deleted: Array<{ calendarId: string; eventId: string }>;
 };
 
 function fakeCalendar(
   busyById: Record<string, BusyPeriod[]> = {},
 ): FakeCalendar {
   const created: FakeCalendar["created"] = [];
+  const deleted: FakeCalendar["deleted"] = [];
   const calendar: FakeCalendar = {
     name: "google_calendar",
     ready: true,
     busyById,
     created,
+    deleted,
     queryBusyCalls: 0,
     async queryBusy({ calendarIds }) {
       calendar.queryBusyCalls += 1;
@@ -88,6 +91,9 @@ function fakeCalendar(
         calendarId: input.calendarId,
       });
       return { id: `evt-${created.length}` };
+    },
+    async deleteEvent({ calendarId, eventId }) {
+      deleted.push({ calendarId, eventId });
     },
   };
   return calendar;

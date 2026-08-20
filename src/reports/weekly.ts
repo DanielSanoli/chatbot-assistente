@@ -21,6 +21,14 @@ export type WeeklyReportData = {
   periodo: { inicio: string; fim: string };
   conversasAtendidas: number;
   agendamentosConcluidos: number;
+  remarcacoesConcluidas: number;
+  cancelamentosAutonomos: number;
+  /** Minutos de agenda devolvidos por cancelamento — vaga que dá para revender. */
+  minutosLiberados: number;
+  /** Pedidos recusados pela política de antecedência (foram para a recepção). */
+  cancelamentosEmCimaDaHora: number;
+  /** Evento antigo que ficou na agenda após remarcação: exige limpeza manual. */
+  eventosOrfaos: Array<{ inicio: string; eventId: string }>;
   conversasComHandoff: number;
   conversasContidas: number;
   taxaContencao: number;
@@ -94,6 +102,28 @@ export function computeWeeklyReport(
     (e) => e.tipo === "booking.confirmado",
   ).length;
 
+  const remarcacoesConcluidas = events.filter(
+    (e) => e.tipo === "booking.remarcado",
+  ).length;
+
+  const cancelados = events.filter((e) => e.tipo === "booking.cancelado");
+  const cancelamentosAutonomos = cancelados.length;
+  const minutosLiberados = cancelados.reduce(
+    (total, e) => total + Number(e.payload.duracao_min ?? 0),
+    0,
+  );
+
+  const cancelamentosEmCimaDaHora = events.filter(
+    (e) => e.tipo === "booking.cancelamento_tardio",
+  ).length;
+
+  const eventosOrfaos = events
+    .filter((e) => e.tipo === "booking.remarcacao_evento_orfao")
+    .map((e) => ({
+      inicio: String(e.payload.inicio_antigo ?? "(sem data)"),
+      eventId: String(e.payload.event_id_antigo ?? "(sem id)"),
+    }));
+
   const motivoCount = new Map<string, number>();
   for (const e of handoffEvents) {
     const motivo = String(e.payload.motivo ?? "desconhecido");
@@ -152,6 +182,11 @@ export function computeWeeklyReport(
     },
     conversasAtendidas,
     agendamentosConcluidos,
+    remarcacoesConcluidas,
+    cancelamentosAutonomos,
+    minutosLiberados,
+    cancelamentosEmCimaDaHora,
+    eventosOrfaos,
     conversasComHandoff,
     conversasContidas,
     taxaContencao,
@@ -185,9 +220,29 @@ export function formatWeeklyReportText(data: WeeklyReportData): string {
   }
   lines.push("");
 
+  if (data.eventosOrfaos.length > 0) {
+    lines.push("## ⚠ Eventos a limpar na agenda");
+    lines.push(
+      "Remarcação concluída, mas o evento antigo não saiu do Google Calendar. Apague à mão para liberar o horário:",
+    );
+    for (const item of data.eventosOrfaos) {
+      lines.push(`- ${item.inicio} (evento ${item.eventId})`);
+    }
+    lines.push("");
+  }
+
   lines.push("## Resumo");
   lines.push(`- Conversas atendidas: **${data.conversasAtendidas}**`);
   lines.push(`- Agendamentos concluídos: **${data.agendamentosConcluidos}**`);
+  lines.push(`- Remarcações resolvidas pelo bot: **${data.remarcacoesConcluidas}**`);
+  lines.push(
+    `- Cancelamentos resolvidos pelo bot: **${data.cancelamentosAutonomos}** (${(
+      data.minutosLiberados / 60
+    ).toFixed(1)}h de agenda devolvidas para revenda)`,
+  );
+  lines.push(
+    `- Pedidos em cima da hora enviados à recepção: **${data.cancelamentosEmCimaDaHora}**`,
+  );
   lines.push(
     `- Contenção (sem handoff): **${data.conversasContidas}/${data.conversasAtendidas} (${pct}%)**`,
   );

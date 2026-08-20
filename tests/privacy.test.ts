@@ -13,6 +13,8 @@ import { purgeOldConversations } from "../src/jobs/purge.js";
 import type { CalendarClient } from "../src/calendar/google.js";
 import { ConfigService } from "../src/config/index.js";
 import {
+  insertDemanda,
+  listDemandasAbertas,
   openStore,
   setConversationState,
   tryInsertMessage,
@@ -30,6 +32,8 @@ const ENV: NodeJS.ProcessEnv = {
   GOOGLE_CALENDAR_BRUNO: "bruno@example.com",
   HANDOFF_WHATSAPP: "+5511999999999",
 };
+
+const TZ = "America/Sao_Paulo";
 
 const dirs: string[] = [];
 const stores: Store[] = [];
@@ -58,6 +62,9 @@ function noopCalendar(): CalendarClient {
     },
     async createEvent() {
       return { id: "evt-test" };
+    },
+    async deleteEvent() {
+      /* nada a fazer no fake */
     },
   };
 }
@@ -161,6 +168,8 @@ describe("deleteUserData", () => {
     expect(deleteUserData(store, "5511900000009")).toEqual({
       mensagens: 0,
       conversaRemovida: false,
+      agendamentosRemovidos: 0,
+      demandasRemovidas: 0,
     });
   });
 });
@@ -315,7 +324,14 @@ describe("purgeOldConversations", () => {
 
     const result = purgeOldConversations(store, 180);
 
-    expect(result).toEqual({ conversas: 0, mensagens: 0, preservadasEmHumano: 0 });
+    expect(result).toEqual({
+      conversas: 0,
+      mensagens: 0,
+      preservadasEmHumano: 0,
+      agendamentos: 0,
+      eventos: 0,
+      demandas: 0,
+    });
     expect(eventsOfType(store, "lgpd.expurgo")).toHaveLength(0);
   });
 
@@ -328,5 +344,71 @@ describe("purgeOldConversations", () => {
     const result = purgeOldConversations(store, 180, { now: futuro });
 
     expect(result.conversas).toBe(1);
+  });
+});
+
+describe("retenção do log de auditoria e da fila de retorno", () => {
+  it("expurga events antigos — a pergunta do paciente não fica para sempre", () => {
+    const { store } = setup();
+    const agora = DateTime.fromISO("2026-07-27T12:00:00", { zone: TZ });
+
+    const velho = agora.minus({ days: 200 }).toUTC().toFormat("yyyy-LL-dd HH:mm:ss");
+    const recente = agora.minus({ days: 10 }).toUTC().toFormat("yyyy-LL-dd HH:mm:ss");
+
+    store.db
+      .prepare(`INSERT INTO events (tipo, payload_json, criado_em) VALUES (?, ?, ?)`)
+      .run(
+        "handoff.transferido",
+        JSON.stringify({ user_text: "estou com dor forte no siso" }),
+        velho,
+      );
+    store.db
+      .prepare(`INSERT INTO events (tipo, payload_json, criado_em) VALUES (?, ?, ?)`)
+      .run("handoff.transferido", JSON.stringify({ user_text: "recente" }), recente);
+
+    const result = purgeOldConversations(store, 180, { now: agora, timezone: TZ });
+
+    expect(result.eventos).toBe(1);
+    const restantes = store.db
+      .prepare(`SELECT payload_json FROM events WHERE tipo = ?`)
+      .all("handoff.transferido") as Array<{ payload_json: string }>;
+    expect(restantes).toHaveLength(1);
+    expect(restantes[0]!.payload_json).toContain("recente");
+    expect(restantes[0]!.payload_json).not.toContain("siso");
+  });
+
+  it("expurga demandas antigas e preserva as recentes", () => {
+    const { store } = setup();
+    const agora = DateTime.fromISO("2026-07-27T12:00:00", { zone: TZ });
+
+    insertDemanda(store, { waId: "5511900000021", servicoId: "limpeza" });
+    insertDemanda(store, { waId: "5511900000022", servicoId: "clareamento" });
+    store.db
+      .prepare(`UPDATE demandas SET criado_em = ? WHERE wa_id = ?`)
+      .run(
+        agora.minus({ days: 200 }).toUTC().toFormat("yyyy-LL-dd HH:mm:ss"),
+        "5511900000021",
+      );
+
+    const result = purgeOldConversations(store, 180, { now: agora, timezone: TZ });
+
+    expect(result.demandas).toBe(1);
+    const fila = listDemandasAbertas(store);
+    expect(fila).toHaveLength(1);
+    expect(fila[0]?.waId).toBe("5511900000022");
+  });
+
+  it("exclusão a pedido tira o telefone da fila de retorno", () => {
+    const { store } = setup();
+    const waId = "5511900000030";
+    insertDemanda(store, { waId, servicoId: "limpeza", janelaDesejada: "sexta" });
+    insertDemanda(store, { waId: "5511900000031", servicoId: "limpeza" });
+
+    const result = deleteUserData(store, waId);
+
+    expect(result.demandasRemovidas).toBe(1);
+    expect(listDemandasAbertas(store).map((d) => d.waId)).toEqual([
+      "5511900000031",
+    ]);
   });
 });

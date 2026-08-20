@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DateTime } from "luxon";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgent } from "../src/brain/agent.js";
+import { marcarAvisoLgpdEntregue } from "../src/brain/privacy.js";
 import type { CalendarClient } from "../src/calendar/google.js";
 import { ConfigService } from "../src/config/index.js";
 import {
@@ -60,6 +61,9 @@ function calendarOk(): CalendarClient {
     async createEvent() {
       return { id: "evt" };
     },
+    async deleteEvent() {
+      /* nada a fazer no fake */
+    },
   };
 }
 
@@ -102,6 +106,12 @@ describe("aviso LGPD", () => {
     const first = await agent.handleUserMessage(waId, "oi");
     expect(first.reply?.startsWith(aviso)).toBe(true);
     expect(first.reply).toContain("Olá! Como posso ajudar?");
+    // O agente sinaliza; quem marca é o canal, depois do envio dar certo.
+    expect(first.avisoLgpdPendente).toBe(true);
+    expect(precisaEnviarAvisoLgpd(store, waId)).toBe(true);
+    expect(eventsOfType(store, "lgpd.aviso_enviado")).toHaveLength(0);
+
+    marcarAvisoLgpdEntregue(store, waId);
     expect(precisaEnviarAvisoLgpd(store, waId)).toBe(false);
     expect(eventsOfType(store, "lgpd.aviso_enviado")).toHaveLength(1);
 
@@ -128,6 +138,7 @@ describe("aviso LGPD", () => {
 
     const second = await agent.handleUserMessage(waId, "voltei depois de 7h");
     expect(second.reply?.startsWith(aviso)).toBe(false);
+    expect(second.avisoLgpdPendente).toBe(false);
     expect(second.reply).toContain("Claro, em que posso ajudar?");
     expect(eventsOfType(store, "lgpd.aviso_enviado")).toHaveLength(1);
   });
@@ -152,7 +163,39 @@ describe("aviso LGPD", () => {
     expect(turn.reply?.startsWith(aviso)).toBe(true);
     expect(turn.reply).toContain(config.handoff.mensagem);
     expect(claude).not.toHaveBeenCalled();
+    expect(turn.avisoLgpdPendente).toBe(true);
+
+    marcarAvisoLgpdEntregue(store, waId);
     expect(eventsOfType(store, "lgpd.aviso_enviado")).toHaveLength(1);
+  });
+
+  it("envio que falha não consome o aviso — o paciente recebe no próximo turno", async () => {
+    const { store, config } = setup();
+    const waId = "5511888000205";
+    const aviso = config.privacidade.aviso_primeira_mensagem;
+
+    const agent = createAgent({
+      store,
+      calendar: calendarOk(),
+      notifyHuman: async () => undefined,
+      getConfig: () => config,
+      claude: createScriptedClaude([
+        () => textResult("Olá!"),
+        () => textResult("Olá de novo!"),
+      ]),
+    });
+
+    // Turno 1: o aviso é montado, mas a Graph API falha — ninguém marca nada.
+    const primeiro = await agent.handleUserMessage(waId, "oi");
+    expect(primeiro.reply?.startsWith(aviso)).toBe(true);
+    expect(primeiro.avisoLgpdPendente).toBe(true);
+    // (sem marcarAvisoLgpdEntregue: simula o throw do sendText)
+
+    // Turno 2: o aviso continua devendo, então sai de novo.
+    const segundo = await agent.handleUserMessage(waId, "alguém aí?");
+    expect(segundo.reply?.startsWith(aviso)).toBe(true);
+    expect(segundo.avisoLgpdPendente).toBe(true);
+    expect(eventsOfType(store, "lgpd.aviso_enviado")).toHaveLength(0);
   });
 
   it("NÃO sai quando isMutedEmHumano é true", async () => {

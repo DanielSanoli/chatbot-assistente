@@ -152,6 +152,52 @@ describe("relatório semanal", () => {
     );
   });
 
+  it("conta cancelamento, remarcação e agenda devolvida", () => {
+    const store = setupStore();
+    const t = "2026-07-28T10:00:00.000Z";
+    seedMessage(store, "5511111111111", "in", "quero desmarcar", t);
+    seedMessage(store, "5511111111111", "out", "cancelado", t);
+
+    seedEvent(store, "booking.cancelado", {
+      wa_id_masked: maskPhone("5511111111111"),
+      duracao_min: 45,
+    }, t);
+    seedEvent(store, "booking.cancelado", {
+      wa_id_masked: maskPhone("5511222222222"),
+      duracao_min: 90,
+    }, t);
+    seedEvent(store, "booking.remarcado", {
+      wa_id_masked: maskPhone("5511333333333"),
+    }, t);
+    seedEvent(store, "booking.cancelamento_tardio", {
+      wa_id_masked: maskPhone("5511444444444"),
+      horas_ate: 2,
+    }, t);
+    seedEvent(store, "booking.remarcacao_evento_orfao", {
+      wa_id_masked: maskPhone("5511555555555"),
+      event_id_antigo: "evt-9",
+      inicio_antigo: "2026-07-30T09:00:00-03:00",
+    }, t);
+
+    const data = computeWeeklyReport(
+      store,
+      DateTime.fromISO("2026-07-28", { zone: TZ }),
+    );
+
+    expect(data.cancelamentosAutonomos).toBe(2);
+    expect(data.minutosLiberados).toBe(135);
+    expect(data.remarcacoesConcluidas).toBe(1);
+    // Remarcação não é agendamento novo — não pode inflar o número de vendas.
+    expect(data.agendamentosConcluidos).toBe(0);
+    expect(data.cancelamentosEmCimaDaHora).toBe(1);
+    expect(data.eventosOrfaos).toHaveLength(1);
+
+    const texto = formatWeeklyReportText(data);
+    expect(texto).toContain("2.3h de agenda devolvidas");
+    expect(texto).toContain("Eventos a limpar na agenda");
+    expect(texto).toContain("evt-9");
+  });
+
   it("contenção calcula certo com conversas mistas", () => {
     const store = setupStore();
     const base = "2026-07-28T15:00:00.000Z";

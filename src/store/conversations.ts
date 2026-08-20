@@ -36,6 +36,12 @@ export type EstadoPayload = {
   motivoHandoff?: string;
   emHumanoDesde?: string;
   falhasEntendimento?: FalhaEntendimento;
+  /** Agendamento que está sendo remarcado; some se a proposta expirar. */
+  remarcandoId?: number;
+  /** Agendamento lido de volta ao paciente, aguardando "sim, pode cancelar". */
+  cancelandoId?: number;
+  /** Turno em que o horário foi lido de volta — a confirmação vem depois dele. */
+  cancelandoEm?: string;
 };
 
 export type ConversationRow = {

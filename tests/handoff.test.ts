@@ -17,10 +17,12 @@ import { CalendarUnavailable } from "../src/calendar/google.js";
 import { ConfigService } from "../src/config/index.js";
 import {
   getConversation,
+  listDemandasAbertas,
   openStore,
   setConversationState,
   type Store,
 } from "../src/store/index.js";
+import { maskPhone } from "../src/channel/mask.js";
 import { createScriptedClaude, toolUseResult } from "./helpers/claudeMock.js";
 
 const ENV: NodeJS.ProcessEnv = {
@@ -64,6 +66,9 @@ function calendarOk(): CalendarClient {
     async createEvent() {
       return { id: "evt" };
     },
+    async deleteEvent() {
+      /* nada a fazer no fake */
+    },
   };
 }
 
@@ -75,6 +80,9 @@ function calendarDown(): CalendarClient {
       throw new CalendarUnavailable("Google fora do ar");
     },
     async createEvent() {
+      throw new CalendarUnavailable("Google fora do ar");
+    },
+    async deleteEvent() {
       throw new CalendarUnavailable("Google fora do ar");
     },
   };
@@ -324,6 +332,9 @@ describe("demanda não atendida", () => {
       async createEvent() {
         return { id: "x" };
       },
+      async deleteEvent() {
+        /* nada a fazer no fake */
+      },
     };
 
     const result = await proporHorarios(
@@ -339,13 +350,25 @@ describe("demanda não atendida", () => {
 
     expect(result.ok).toBe(false);
     expect(result.demanda_registrada).toBe(true);
+    // O evento é log de auditoria: telefone mascarado, sem dado de contato.
     const demandas = eventsOfType(store, "demanda_nao_atendida");
     expect(demandas.length).toBeGreaterThanOrEqual(1);
     expect(demandas[0]).toMatchObject({
-      telefone: waId,
+      wa_id_masked: maskPhone(waId),
       servicoId: "limpeza",
     });
     expect(demandas[0]).toHaveProperty("timestamp");
+    expect(JSON.stringify(demandas[0])).not.toContain(waId);
+
+    // O telefone completo vive na fila de retorno, que é o que a recepção usa.
+    const fila = listDemandasAbertas(store);
+    expect(fila).toHaveLength(1);
+    expect(fila[0]).toMatchObject({
+      waId,
+      servicoId: "limpeza",
+      janelaDesejada: "terça de manhã",
+      status: "ABERTA",
+    });
   });
 
   it("preferência por domingo (indisponível) registra demanda", async () => {

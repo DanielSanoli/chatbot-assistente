@@ -37,6 +37,11 @@ export type CreatedCalendarEvent = {
   htmlLink?: string;
 };
 
+export type DeleteCalendarEventInput = {
+  calendarId: string;
+  eventId: string;
+};
+
 export type CalendarClient = {
   name: "google_calendar";
   ready: boolean;
@@ -44,6 +49,11 @@ export type CalendarClient = {
   createEvent: (
     input: CreateCalendarEventInput,
   ) => Promise<CreatedCalendarEvent>;
+  /**
+   * Remove o evento e devolve o horário à agenda. Evento já inexistente (410 /
+   * 404) não é erro: o objetivo — slot livre — está atingido.
+   */
+  deleteEvent: (input: DeleteCalendarEventInput) => Promise<void>;
 };
 
 export type GoogleCalendarDeps = {
@@ -55,6 +65,7 @@ export type GoogleCalendarDeps = {
   insertEvent?: (
     input: CreateCalendarEventInput,
   ) => Promise<CreatedCalendarEvent>;
+  removeEvent?: (input: DeleteCalendarEventInput) => Promise<void>;
 };
 
 function parseServiceAccountJson(raw: string): {
@@ -240,6 +251,32 @@ export function createGoogleCalendarClient(
       }
     });
 
+  const removeEvent =
+    deps.removeEvent ??
+    (async (input: DeleteCalendarEventInput) => {
+      const auth = getJwtAuth(deps.serviceAccountJson);
+      const calendar = google.calendar({ version: "v3", auth });
+
+      try {
+        await calendar.events.delete({
+          calendarId: input.calendarId,
+          eventId: input.eventId,
+        });
+      } catch (err) {
+        // 404/410 = evento já removido (pela recepção, por exemplo). O estado
+        // desejado é "esse horário está livre", e ele já está.
+        const status = (err as { code?: number; status?: number })?.code ??
+          (err as { status?: number })?.status;
+        if (status === 404 || status === 410) return;
+        if (err instanceof CalendarUnavailable) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        throw new CalendarUnavailable(
+          `Falha ao remover evento no Google Calendar: ${message}`,
+          { cause: err },
+        );
+      }
+    });
+
   return {
     name: "google_calendar",
     ready: true,
@@ -264,6 +301,18 @@ export function createGoogleCalendarClient(
         const message = err instanceof Error ? err.message : String(err);
         throw new CalendarUnavailable(
           `Falha ao criar evento no Google Calendar: ${message}`,
+          { cause: err },
+        );
+      }
+    },
+    async deleteEvent(input) {
+      try {
+        await removeEvent(input);
+      } catch (err) {
+        if (err instanceof CalendarUnavailable) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        throw new CalendarUnavailable(
+          `Falha ao remover evento no Google Calendar: ${message}`,
           { cause: err },
         );
       }

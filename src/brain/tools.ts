@@ -9,6 +9,11 @@ import {
   type BookingContext,
 } from "./booking.js";
 import {
+  cancelarAgendamento,
+  consultarAgendamentos,
+  remarcarAgendamento,
+} from "./appointments.js";
+import {
   matchTemaSempreHumano,
   registerUnderstandingFailure,
   transferToHuman,
@@ -25,7 +30,10 @@ export type ToolName =
   | "acionar_handoff"
   | "registrar_falha_entendimento"
   | "propor_horarios"
-  | "confirmar_agendamento";
+  | "confirmar_agendamento"
+  | "consultar_agendamento"
+  | "cancelar_agendamento"
+  | "remarcar_agendamento";
 
 export type ToolContext = {
   config: ClientConfig;
@@ -156,6 +164,13 @@ export function buscarFaq(config: ClientConfig, assunto: string) {
   };
 }
 
+/** O modelo às vezes manda o id como string ("3"); número inválido vira undefined. */
+function toOptionalId(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 function toBookingContext(ctx: ToolContext): BookingContext {
   return {
     store: ctx.store,
@@ -255,6 +270,21 @@ export async function executeTool(
         slotEscolhido: String(input.slotEscolhido ?? ""),
         nomeCompleto: String(input.nomeCompleto ?? ""),
       });
+    case "consultar_agendamento":
+      return consultarAgendamentos(toBookingContext(ctx));
+    case "cancelar_agendamento":
+      return cancelarAgendamento(toBookingContext(ctx), {
+        agendamentoId: toOptionalId(input.agendamentoId),
+        confirmado: input.confirmado === true || input.confirmado === "true",
+      });
+    case "remarcar_agendamento":
+      return remarcarAgendamento(toBookingContext(ctx), {
+        agendamentoId: toOptionalId(input.agendamentoId),
+        preferencia:
+          input.preferencia !== undefined
+            ? String(input.preferencia)
+            : undefined,
+      });
     default: {
       const _exhaustive: never = name;
       return { erro: `ferramenta desconhecida: ${_exhaustive}` };
@@ -349,6 +379,57 @@ export const ANTHROPIC_TOOLS = [
         nomeCompleto: { type: "string" },
       },
       required: ["slotEscolhido", "nomeCompleto"],
+    },
+  },
+  {
+    name: "consultar_agendamento",
+    description:
+      "Lista os horários que ESTE contato já tem marcados. Use SEMPRE antes de falar de um agendamento existente ('que horas é minha consulta?', 'tenho horário marcado?'), e antes de cancelar ou remarcar. Nunca afirme que existe agendamento sem esta ferramenta.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [] as string[],
+    },
+  },
+  {
+    name: "cancelar_agendamento",
+    description:
+      "Cancela um horário marcado e libera a vaga na agenda. Fluxo obrigatório em dois passos: chame primeiro sem confirmado (ou com confirmado=false), leia ao cliente o horário devolvido e pergunte se confirma; só depois do sim explícito dele chame de novo com confirmado=true. Nunca diga que cancelou antes de receber cancelado=true.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        agendamentoId: {
+          type: "integer",
+          description:
+            "Id do agendamento (de consultar_agendamento). Opcional quando o cliente só tem um.",
+        },
+        confirmado: {
+          type: "boolean",
+          description:
+            "true somente depois de o cliente confirmar explicitamente o cancelamento do horário que você leu para ele.",
+        },
+      },
+      required: [] as string[],
+    },
+  },
+  {
+    name: "remarcar_agendamento",
+    description:
+      "Inicia a remarcação de um horário já marcado: devolve novas opções de horário para o mesmo procedimento. O horário antigo só é liberado quando o cliente escolher um novo e você chamar confirmar_agendamento. Não use cancelar_agendamento antes de remarcar.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        agendamentoId: {
+          type: "integer",
+          description:
+            "Id do agendamento (de consultar_agendamento). Opcional quando o cliente só tem um.",
+        },
+        preferencia: {
+          type: "string",
+          description: "Preferência opcional do cliente (manhã, sexta, etc.).",
+        },
+      },
+      required: [] as string[],
     },
   },
   {

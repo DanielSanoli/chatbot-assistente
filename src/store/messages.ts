@@ -19,6 +19,18 @@ export function upsertConversation(store: Store, waId: string): number {
 }
 
 /**
+ * Id da conversa, ou null se ela não existir. Diferente de upsertConversation:
+ * não cria nada. Quem envia mensagem precisa disto — criar conversa no envio
+ * ressuscita paciente que acabou de exercer o direito de exclusão.
+ */
+export function findConversationId(store: Store, waId: string): number | null {
+  const row = store.db
+    .prepare(`SELECT id FROM conversations WHERE wa_id = ?`)
+    .get(waId) as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
+/**
  * Insere mensagem. Retorna false se wa_message_id já existir (idempotência).
  */
 export function tryInsertMessage(

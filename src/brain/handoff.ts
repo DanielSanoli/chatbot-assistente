@@ -2,6 +2,7 @@ import { DateTime } from "luxon";
 import type { ClientConfig } from "../config/schema.js";
 import { isWorkingDay, parseHhMm, weekdayToDayName, normalizeDayName } from "../calendar/days.js";
 import { logEvent, type Store } from "../store/index.js";
+import { insertDemanda } from "../store/demandas.js";
 import {
   ensureConversation,
   getConversation,
@@ -254,6 +255,14 @@ export function registerUnderstandingFailure(
   };
 }
 
+/**
+ * Registra quem pediu horário que não existia.
+ *
+ * O telefone completo vai para a tabela `demandas` — é lista de retorno
+ * comercial, tem finalidade declarada e entra no expurgo. O evento fica só
+ * com o telefone mascarado, para o relatório e a linha do tempo: log de
+ * auditoria não é lugar de guardar dado de contato.
+ */
 export function recordDemandaNaoAtendida(input: {
   store: Store;
   waId: string;
@@ -266,8 +275,15 @@ export function recordDemandaNaoAtendida(input: {
     .setZone(input.timezone)
     .toISO();
 
+  const demanda = insertDemanda(input.store, {
+    waId: input.waId,
+    servicoId: input.servicoId,
+    janelaDesejada: input.janelaDesejada,
+  });
+
   logEvent(input.store, "demanda_nao_atendida", {
-    telefone: input.waId,
+    wa_id_masked: maskPhone(input.waId),
+    demanda_id: demanda.id,
     servicoId: input.servicoId,
     janela_desejada: input.janelaDesejada ?? null,
     timestamp: ts,

@@ -1,5 +1,7 @@
 import { DateTime } from "luxon";
-import { logEvent, type Store } from "../store/index.js";
+import { logEvent, purgeEventsBefore, type Store } from "../store/index.js";
+import { purgeAppointmentsBefore } from "../store/appointments.js";
+import { purgeDemandasBefore } from "../store/demandas.js";
 import type { ClientConfig } from "../config/schema.js";
 
 export type PurgeResult = {
@@ -7,6 +9,12 @@ export type PurgeResult = {
   mensagens: number;
   /** Conversas elegíveis pela idade mas preservadas por estarem EM_HUMANO ativo. */
   preservadasEmHumano: number;
+  /** Agendamentos cujo atendimento já passou do prazo de retenção. */
+  agendamentos: number;
+  /** Linhas do log de auditoria (contêm a pergunta do paciente). */
+  eventos: number;
+  /** Fila de retorno comercial (contém telefone). */
+  demandas: number;
 };
 
 export type PurgeOptions = {
@@ -118,17 +126,44 @@ export function purgeOldConversations(
 
   run(candidatos);
 
-  if (conversas > 0 || preservadasEmHumano > 0) {
+  // Agendamento é apagado pela data do atendimento, não pela atividade da
+  // conversa: o registro de uma consulta feita há 200 dias não pode sobreviver
+  // só porque o paciente mandou mensagem ontem.
+  const agendamentos = purgeAppointmentsBefore(store, corte);
+  const demandas = purgeDemandasBefore(store, corte);
+
+  // events por último e sempre: é a tabela que guarda a pergunta do paciente
+  // (handoff.transferido, resposta_sem_fonte). O expurgo próprio é gravado
+  // depois do DELETE, então ele nunca apaga o registro da própria execução.
+  const eventos = purgeEventsBefore(store, corteSql);
+
+  if (
+    conversas > 0 ||
+    preservadasEmHumano > 0 ||
+    agendamentos > 0 ||
+    demandas > 0 ||
+    eventos > 0
+  ) {
     logEvent(store, "lgpd.expurgo", {
       conversas,
       mensagens,
+      agendamentos,
+      demandas,
+      eventos,
       preservadas_em_humano: preservadasEmHumano,
       retencao_dias: retencaoDias,
       corte: corteSql,
     });
   }
 
-  return { conversas, mensagens, preservadasEmHumano };
+  return {
+    conversas,
+    mensagens,
+    preservadasEmHumano,
+    agendamentos,
+    eventos,
+    demandas,
+  };
 }
 
 /** Açúcar: lê retenção e janela de silêncio direto da config do cliente. */

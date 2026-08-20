@@ -20,7 +20,15 @@ export {
   isAmbiguousSlotChoice,
   isFullName,
   expirePropostoIfNeeded,
+  formatDataHora,
 } from "./booking.js";
+export {
+  consultarAgendamentos,
+  cancelarAgendamento,
+  remarcarAgendamento,
+  ANTECEDENCIA_INSUFICIENTE,
+  PENDENCIA_TTL_MINUTES,
+} from "./appointments.js";
 export {
   transferToHuman,
   detectUrgency,
@@ -34,6 +42,7 @@ export {
 export {
   detectDeleteRequest,
   deleteUserData,
+  marcarAvisoLgpdEntregue,
   DELETE_CONFIRMATION_MESSAGE,
   type DeleteUserDataResult,
 } from "./privacy.js";

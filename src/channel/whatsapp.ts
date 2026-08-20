@@ -8,6 +8,7 @@ import type {
 import type { Store } from "../store/index.js";
 import { logEvent } from "../store/index.js";
 import {
+  findConversationId,
   tryInsertMessage,
   upsertConversation,
 } from "../store/messages.js";
@@ -135,17 +136,23 @@ export function createWhatsappChannel(deps: WhatsappChannelDeps) {
           messages?: Array<{ id?: string }>;
         };
         const outId = json.messages?.[0]?.id ?? null;
-        const conversationId = upsertConversation(deps.store, waId);
-        tryInsertMessage(deps.store, {
-          conversationId,
-          direcao: "out",
-          texto,
-          waMessageId: outId,
-        });
+        // Só registra a saída em conversa que JÁ existe. Criar aqui ressuscitaria
+        // quem acabou de pedir exclusão (a confirmação é enviada logo depois do
+        // DELETE) e abriria conversa para o número da recepção nos handoffs.
+        const conversationId = findConversationId(deps.store, waId);
+        if (conversationId !== null) {
+          tryInsertMessage(deps.store, {
+            conversationId,
+            direcao: "out",
+            texto,
+            waMessageId: outId,
+          });
+        }
         logEvent(deps.store, "whatsapp.outbound", {
           wa_id_masked: maskPhone(waId),
           wa_message_id: outId,
           length: texto.length,
+          conversa_registrada: conversationId !== null,
         });
         log.info(
           { wa_id: maskPhone(waId), attempt, wa_message_id: outId },
@@ -166,6 +173,13 @@ export function createWhatsappChannel(deps: WhatsappChannelDeps) {
           { wa_id: maskPhone(waId), status, attempt },
           "whatsapp sendText failed",
         );
+        // O webhook já respondeu 200 à Meta, então ninguém reenvia por nós:
+        // uma falha aqui é paciente sem resposta. Precisa ficar visível.
+        logEvent(deps.store, "whatsapp.send_failed", {
+          wa_id_masked: maskPhone(waId),
+          status,
+          tentativas: attempt,
+        });
         throw lastError;
       }
 
@@ -224,10 +238,13 @@ export function createWhatsappChannel(deps: WhatsappChannelDeps) {
         return;
       }
 
+      // Sem o texto: `events` é log de auditoria, e a mensagem crua do paciente
+      // de clínica é dado de saúde. O conteúdo já vive em `messages`, que tem
+      // exclusão por pedido e expurgo por retenção.
       logEvent(deps.store, "whatsapp.inbound_text", {
         wa_id_masked: maskPhone(waId),
         wa_message_id: waMessageId,
-        texto: text,
+        length: text.length,
       });
       log.info(
         {

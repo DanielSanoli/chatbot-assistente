@@ -36,6 +36,7 @@ agenda:
   antecedencia_minima_horas: 2
   janela_maxima_dias: 14
   passo_grade_min: 15
+  cancelamento_antecedencia_horas: 24
   feriados:
     - "2026-01-01"
     - "2026-12-25"
@@ -71,6 +72,7 @@ servicos:
       - endodontia
     duracao_min: 90
     preco: null
+    agendavel: false
   - id: consulta
     nome: Consulta inicial
     aliases: []
@@ -101,7 +103,7 @@ pagamento:
 
 faq:
   - pergunta: Como remarcar uma consulta?
-    resposta: Peça a remarcação por aqui com pelo menos 24h de antecedência.
+    resposta: Peça a remarcação por aqui com pelo menos 24h de antecedência e eu já ofereço os horários disponíveis. Com menos de 24h, a recepção assume o pedido.
   - pergunta: Preciso chegar adiantado?
     resposta: Chegue com 10 minutos de antecedência para o cadastro.
 

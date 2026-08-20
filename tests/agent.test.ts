@@ -1,17 +1,22 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DateTime } from "luxon";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgent } from "../src/brain/agent.js";
 import { buildSystemPrompt } from "../src/brain/prompt.js";
 import type { CalendarClient } from "../src/calendar/google.js";
 import { ConfigService } from "../src/config/index.js";
 import {
+  insertAppointment,
+  listActiveAppointments,
   openStore,
   tryInsertMessage,
   upsertConversation,
   type Store,
 } from "../src/store/index.js";
+
+const TZ = "America/Sao_Paulo";
 import {
   createScriptedClaude,
   lastUserText,
@@ -28,6 +33,9 @@ function noopCalendar(): CalendarClient {
     },
     async createEvent() {
       return { id: "evt-test" };
+    },
+    async deleteEvent() {
+      /* nada a fazer no fake */
     },
   };
 }
@@ -394,5 +402,139 @@ describe("agent conversation", () => {
         ]).toContain(body);
       }
     }
+  });
+});
+
+describe("cancelamento em cima da hora", () => {
+  it("transfere mesmo se o modelo tentar dizer que cancelou", async () => {
+    const { store, config } = setup();
+    const waId = "551100000090";
+    const calendar = noopCalendar();
+    let deletou = false;
+    calendar.deleteEvent = async () => {
+      deletou = true;
+    };
+
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+    // clinica-exemplo exige 24h; este horário está a 3h de distância.
+    insertAppointment(store, {
+      waId,
+      servicoId: "limpeza",
+      servicoNome: "Limpeza dental",
+      profissionalId: "dra-ana",
+      profissionalNome: "Dra. Ana Silva",
+      calendarioId: "ana@example.com",
+      eventId: "evt-proximo",
+      inicio: agora.plus({ hours: 3 }).toISO() ?? "",
+      fim: agora.plus({ hours: 3, minutes: 45 }).toISO() ?? "",
+      nome: "Maria Silva",
+    });
+
+    const agent = createAgent({
+      store,
+      calendar,
+      notifyHuman: noopNotifyHuman,
+      getConfig: () => config,
+      now: () => agora.toJSDate(),
+      claude: createScriptedClaude([
+        () => toolUseResult("cancelar_agendamento", { confirmado: true }),
+        () => textResult("Pronto, cancelei sua consulta!"),
+      ]),
+    });
+
+    const turn = await agent.handleUserMessage(waId, "cancela minha consulta");
+
+    expect(turn.handoff).toBe(true);
+    expect(deletou).toBe(false);
+    const body = replyBody(turn.reply, config.privacidade.aviso_primeira_mensagem);
+    expect(body).not.toMatch(/cancelei|cancelad/i);
+    expect([
+      config.handoff.mensagem,
+      config.handoff.fora_do_horario,
+    ]).toContain(body);
+    expect(listActiveAppointments(store, waId, agora)).toHaveLength(1);
+  });
+});
+
+describe("serviço não agendável força handoff", () => {
+  // Serviço COM preço e SEM agendamento automático — a combinação que o freio
+  // de preço não pega. É o caso dos outros verticais (pacote com valor de
+  // tabela, mas agenda montada à mão).
+  function configComServicoManual() {
+    const config = ConfigService.load("./clients/clinica-exemplo.yaml", ENV);
+    const canal = config.servicos.find((s) => s.id === "canal")!;
+    canal.preco = 1200;
+    canal.agendavel = false;
+    return config;
+  }
+
+  it("propor_horarios em serviço manual transfere mesmo sem o modelo pedir", async () => {
+    const { store } = setup();
+    const config = configComServicoManual();
+    const waId = "551100000091";
+
+    const agent = createAgent({
+      store,
+      calendar: noopCalendar(),
+      notifyHuman: noopNotifyHuman,
+      getConfig: () => config,
+      claude: createScriptedClaude([
+        // O modelo tenta agendar direto e depois insiste em responder sozinho.
+        () => toolUseResult("propor_horarios", { servicoId: "canal" }),
+        () => textResult("Consegui um horário para o seu canal na terça!"),
+      ]),
+    });
+
+    const turn = await agent.handleUserMessage(waId, "quero marcar um canal");
+
+    expect(turn.handoff).toBe(true);
+    expect(turn.ferramentas).toContain("acionar_handoff");
+    const body = replyBody(turn.reply, config.privacidade.aviso_primeira_mensagem);
+    expect([config.handoff.mensagem, config.handoff.fora_do_horario]).toContain(body);
+    expect(body).not.toMatch(/terça|consegui um horário/i);
+
+    const motivos = eventsOfType(store, "handoff.transferido").map(
+      (e) => (e as { motivo?: string }).motivo,
+    );
+    expect(motivos).toContain("servico_nao_agendavel");
+  });
+
+  it("remarcar_agendamento em serviço manual também transfere", async () => {
+    const { store } = setup();
+    const config = configComServicoManual();
+    const waId = "551100000092";
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+
+    insertAppointment(store, {
+      waId,
+      servicoId: "canal",
+      servicoNome: "Tratamento de canal",
+      profissionalId: "dra-ana",
+      profissionalNome: "Dra. Ana Silva",
+      calendarioId: "ana@example.com",
+      eventId: "evt-canal",
+      inicio: agora.plus({ days: 5 }).toISO() ?? "",
+      fim: agora.plus({ days: 5, minutes: 90 }).toISO() ?? "",
+      nome: "Maria Silva",
+    });
+
+    const agent = createAgent({
+      store,
+      calendar: noopCalendar(),
+      notifyHuman: noopNotifyHuman,
+      getConfig: () => config,
+      now: () => agora.toJSDate(),
+      claude: createScriptedClaude([
+        () => toolUseResult("remarcar_agendamento", {}),
+        () => textResult("Remarquei para quinta!"),
+      ]),
+    });
+
+    const turn = await agent.handleUserMessage(waId, "preciso mudar meu canal");
+
+    expect(turn.handoff).toBe(true);
+    const body = replyBody(turn.reply, config.privacidade.aviso_primeira_mensagem);
+    expect(body).not.toMatch(/remarquei|quinta/i);
+    expect(listActiveAppointments(store, waId, agora)).toHaveLength(1);
   });
 });

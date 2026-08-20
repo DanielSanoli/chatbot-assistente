@@ -15,6 +15,7 @@ import {
   openStore,
   type Store,
 } from "../src/store/index.js";
+import { deleteUserData } from "../src/brain/privacy.js";
 
 const APP_SECRET = "test-app-secret";
 const VERIFY_TOKEN = "test-verify-token";
@@ -446,6 +447,116 @@ describe("sendText retry", () => {
       /Graph API 400/,
     );
     expect(fetch4xx).toHaveBeenCalledTimes(1);
+    store.close();
+  });
+});
+
+describe("privacidade e persistência do canal", () => {
+  const okFetch = () =>
+    vi.fn(async () =>
+      new Response(JSON.stringify({ messages: [{ id: "wamid.out" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+  function canal(store: Store, fetchFn: ReturnType<typeof okFetch>) {
+    return createWhatsappChannel({
+      store,
+      phoneNumberId: "phone",
+      accessToken: "token",
+      verifyToken: VERIFY_TOKEN,
+      appSecret: APP_SECRET,
+      fetchFn,
+    });
+  }
+
+  it("evento de entrada não guarda o texto cru do paciente", async () => {
+    const store = tempStore();
+    const channel = canal(store, okFetch());
+
+    await channel.processWebhookPayload(
+      textPayload("wamid.pii", "estou com dor e sangramento no siso") as never,
+    );
+
+    const eventos = store.db
+      .prepare(`SELECT payload_json FROM events WHERE tipo = ?`)
+      .all("whatsapp.inbound_text") as Array<{ payload_json: string }>;
+
+    expect(eventos).toHaveLength(1);
+    expect(eventos[0]!.payload_json).not.toContain("sangramento");
+    expect(eventos[0]!.payload_json).not.toContain("5511999998888");
+    expect(JSON.parse(eventos[0]!.payload_json).length).toBe(
+      "estou com dor e sangramento no siso".length,
+    );
+
+    // O conteúdo continua em messages, que tem exclusão e expurgo.
+    const msg = store.db
+      .prepare(`SELECT texto FROM messages WHERE wa_message_id = ?`)
+      .get("wamid.pii") as { texto: string };
+    expect(msg.texto).toContain("sangramento");
+    store.close();
+  });
+
+  it("sendText não cria conversa para quem não tem uma", async () => {
+    const store = tempStore();
+    const fetchFn = okFetch();
+    const channel = canal(store, fetchFn);
+
+    // Número da recepção recebendo resumo de handoff: não é paciente.
+    await channel.sendText("5511977776666", "🔁 Transferência do chatbot");
+
+    const conv = store.db
+      .prepare(`SELECT COUNT(*) AS n FROM conversations WHERE wa_id = ?`)
+      .get("5511977776666") as { n: number };
+    expect(conv.n).toBe(0);
+
+    const evento = store.db
+      .prepare(`SELECT payload_json FROM events WHERE tipo = ?`)
+      .get("whatsapp.outbound") as { payload_json: string };
+    expect(JSON.parse(evento.payload_json).conversa_registrada).toBe(false);
+    store.close();
+  });
+
+  it("exclusão LGPD não é desfeita pela confirmação enviada em seguida", async () => {
+    const store = tempStore();
+    const fetchFn = okFetch();
+    const channel = canal(store, fetchFn);
+    const waId = "5511999998888";
+
+    await channel.processWebhookPayload(textPayload("wamid.1", "oi") as never);
+    expect(
+      (store.db.prepare(`SELECT COUNT(*) AS n FROM conversations`).get() as { n: number }).n,
+    ).toBe(1);
+
+    // O agente apaga tudo...
+    deleteUserData(store, waId);
+    // ...e o canal envia a confirmação logo depois.
+    await channel.sendText(waId, "Pronto, apaguei seus dados.");
+
+    const conv = store.db
+      .prepare(`SELECT COUNT(*) AS n FROM conversations WHERE wa_id = ?`)
+      .get(waId) as { n: number };
+    const msgs = store.db
+      .prepare(`SELECT COUNT(*) AS n FROM messages`)
+      .get() as { n: number };
+    expect(conv.n).toBe(0);
+    expect(msgs.n).toBe(0);
+    store.close();
+  });
+
+  it("falha definitiva de envio vira evento observável", async () => {
+    const store = tempStore();
+    const fetchFn = vi.fn(async () => new Response("nope", { status: 400 }));
+    const channel = canal(store, fetchFn as never);
+
+    await expect(channel.sendText("5511999998888", "oi")).rejects.toThrow();
+
+    const falhas = store.db
+      .prepare(`SELECT payload_json FROM events WHERE tipo = ?`)
+      .all("whatsapp.send_failed") as Array<{ payload_json: string }>;
+    expect(falhas).toHaveLength(1);
+    expect(JSON.parse(falhas[0]!.payload_json).status).toBe(400);
     store.close();
   });
 });

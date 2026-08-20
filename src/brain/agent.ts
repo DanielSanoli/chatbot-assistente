@@ -7,11 +7,11 @@ import type { ClientConfig } from "../config/schema.js";
 import { maskPhone } from "../channel/mask.js";
 import {
   logEvent,
-  marcarAvisoLgpdEnviado,
   precisaEnviarAvisoLgpd,
   type Store,
 } from "../store/index.js";
 import { getConversationWindow } from "../store/history.js";
+import { ANTECEDENCIA_INSUFICIENTE } from "./appointments.js";
 import { expirePropostoIfNeeded } from "./booking.js";
 import type { ClaudeClient } from "./claude.js";
 import {
@@ -43,6 +43,12 @@ export type AgentTurnResult = {
   ferramentas: string[];
   handoff: boolean;
   respostaSemFonte: boolean;
+  /**
+   * true = `reply` começa com o aviso de LGPD e ele ainda NÃO foi marcado como
+   * entregue. Quem envia deve chamar marcarAvisoLgpdEntregue após o envio dar
+   * certo — marcar antes faz o paciente perder o aviso se a Graph API falhar.
+   */
+  avisoLgpdPendente: boolean;
 };
 
 export type AgentDeps = {
@@ -65,7 +71,10 @@ function isToolName(name: string): name is ToolName {
     name === "acionar_handoff" ||
     name === "registrar_falha_entendimento" ||
     name === "propor_horarios" ||
-    name === "confirmar_agendamento"
+    name === "confirmar_agendamento" ||
+    name === "consultar_agendamento" ||
+    name === "cancelar_agendamento" ||
+    name === "remarcar_agendamento"
   );
 }
 
@@ -106,10 +115,40 @@ type ClaudeCreateResultContent = Awaited<
   ReturnType<ClaudeClient["createMessage"]>
 >["content"];
 
+const FERRAMENTAS_DE_AGENDA = new Set([
+  "propor_horarios",
+  "confirmar_agendamento",
+  "remarcar_agendamento",
+  "cancelar_agendamento",
+]);
+
 function shouldForceHandoff(toolName: string, result: unknown): string | null {
-  if (toolName !== "buscar_servico" || !result || typeof result !== "object") {
+  if (!result || typeof result !== "object") return null;
+
+  if (FERRAMENTAS_DE_AGENDA.has(toolName)) {
+    const motivo = (result as { motivo?: string }).motivo;
+
+    // Serviço que a casa informa mas não marca sozinha. O freio já existe em
+    // booking.ts (não chama o Calendar), mas sem isto a conversa termina no
+    // texto do modelo — que pode simplesmente não acionar o handoff.
+    // Hoje passa despercebido porque todo agendavel:false também tem
+    // preco:null; some no primeiro serviço com preço E agenda manual.
+    if (motivo === "servico_nao_agendavel") {
+      return "servico_nao_agendavel";
+    }
+
+    // Cancelar/remarcar em cima da hora é decisão da recepção (multa, encaixe).
+    if (motivo === ANTECEDENCIA_INSUFICIENTE) {
+      return toolName === "cancelar_agendamento"
+        ? "cancelamento_em_cima_da_hora"
+        : "remarcacao_em_cima_da_hora";
+    }
+
     return null;
   }
+
+  if (toolName !== "buscar_servico") return null;
+
   const data = result as {
     encontrado?: boolean;
     preco_status?: string;
@@ -150,6 +189,7 @@ export function createAgent(deps: AgentDeps) {
         ferramentas: [],
         handoff: false,
         respostaSemFonte: false,
+        avisoLgpdPendente: false,
       };
     }
 
@@ -178,19 +218,20 @@ export function createAgent(deps: AgentDeps) {
         ferramentas: [],
         handoff: true,
         respostaSemFonte: false,
+        avisoLgpdPendente: false,
       };
     }
 
+    // Prefixa o aviso, mas NÃO marca como enviado: quem marca é o canal, depois
+    // de o envio dar certo (marcarAvisoLgpdEntregue). Marcar aqui faria o
+    // paciente perder o aviso para sempre se a Graph API falhasse no meio.
+    let avisoLgpdPendente = false;
     const withLgpdAviso = (reply: string): string => {
       if (!precisaEnviarAvisoLgpd(deps.store, waId)) {
         return reply;
       }
-      const prefixed = `${config.privacidade.aviso_primeira_mensagem}\n\n${reply}`;
-      marcarAvisoLgpdEnviado(deps.store, waId);
-      logEvent(deps.store, "lgpd.aviso_enviado", {
-        wa_id_masked: maskPhone(waId),
-      });
-      return prefixed;
+      avisoLgpdPendente = true;
+      return `${config.privacidade.aviso_primeira_mensagem}\n\n${reply}`;
     };
 
     // Urgência clínica — prioridade máxima, sem agendar.
@@ -206,6 +247,7 @@ export function createAgent(deps: AgentDeps) {
         ferramentas: ["acionar_handoff"],
         handoff: true,
         respostaSemFonte: false,
+        avisoLgpdPendente,
       };
     }
 
@@ -226,6 +268,7 @@ export function createAgent(deps: AgentDeps) {
         ferramentas: ["acionar_handoff"],
         handoff: true,
         respostaSemFonte: false,
+        avisoLgpdPendente,
       };
     }
 
@@ -316,6 +359,7 @@ export function createAgent(deps: AgentDeps) {
               ferramentas: [...ferramentas, "acionar_handoff"],
               handoff: true,
               respostaSemFonte: false,
+              avisoLgpdPendente,
             };
           }
 
@@ -330,13 +374,18 @@ export function createAgent(deps: AgentDeps) {
             handoffReply = (result as { mensagem: string }).mensagem;
           }
 
+          // Confirmação e cancelamento devolvem o texto exato a enviar: são os
+          // dois momentos em que a mensagem precisa bater com o que foi gravado
+          // na agenda, sem reescrita do modelo.
           if (
-            name === "confirmar_agendamento" &&
             result &&
             typeof result === "object" &&
-            (result as { agendado?: boolean }).agendado === true &&
             typeof (result as { mensagem_cliente?: string }).mensagem_cliente ===
-              "string"
+              "string" &&
+            ((name === "confirmar_agendamento" &&
+              (result as { agendado?: boolean }).agendado === true) ||
+              (name === "cancelar_agendamento" &&
+                (result as { cancelado?: boolean }).cancelado === true))
           ) {
             bookingClientMessage = (result as { mensagem_cliente: string })
               .mensagem_cliente;
@@ -378,10 +427,18 @@ export function createAgent(deps: AgentDeps) {
         }
       }
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errName = err instanceof Error ? err.name : "Error";
       const motivo =
         err instanceof CalendarUnavailable
           ? "erro_interno:CalendarUnavailable"
-          : `erro_interno:${err instanceof Error ? err.name : "Error"}`;
+          : `erro_interno:${errName}`;
+      logEvent(deps.store, "brain.claude_error", {
+        wa_id_masked: maskPhone(waId),
+        error_name: errName,
+        error: errMsg.slice(0, 400),
+        model,
+      });
       const transfer = await transferToHuman({
         ...toolCtxBase,
         motivo,
@@ -393,6 +450,7 @@ export function createAgent(deps: AgentDeps) {
         ferramentas: [...ferramentas, "acionar_handoff"],
         handoff: true,
         respostaSemFonte: false,
+        avisoLgpdPendente,
       };
     }
 
@@ -436,6 +494,7 @@ export function createAgent(deps: AgentDeps) {
       ferramentas,
       handoff,
       respostaSemFonte,
+      avisoLgpdPendente,
     };
   }
 

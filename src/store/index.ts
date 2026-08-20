@@ -1,10 +1,27 @@
-export { openStore, logEvent, type Store } from "./db.js";
+export {
+  openStore,
+  logEvent,
+  purgeEventsBefore,
+  countEventsSince,
+  type Store,
+} from "./db.js";
 export {
   upsertConversation,
+  findConversationId,
   tryInsertMessage,
   countMessagesByWaMessageId,
   type MessageDirection,
 } from "./messages.js";
+export {
+  insertDemanda,
+  listDemandasAbertas,
+  marcarDemandaContatada,
+  deleteDemandasByWaId,
+  purgeDemandasBefore,
+  DEMANDA_STATUSES,
+  type Demanda,
+  type DemandaStatus,
+} from "./demandas.js";
 export {
   getConversationWindow,
   clearConversationMessages,
@@ -23,3 +40,16 @@ export {
   type EstadoPayload,
   type ProposedSlot,
 } from "./conversations.js";
+export {
+  insertAppointment,
+  getAppointment,
+  listActiveAppointments,
+  markAppointmentCancelled,
+  markAppointmentRescheduled,
+  deletePastAppointments,
+  purgeAppointmentsBefore,
+  APPOINTMENT_STATUSES,
+  type Appointment,
+  type AppointmentStatus,
+  type NewAppointment,
+} from "./appointments.js";

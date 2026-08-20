@@ -55,6 +55,9 @@ agenda:
   antecedencia_minima_horas: 3
   janela_maxima_dias: 30
   passo_grade_min: 15
+  # 4h (em vez das 24h da clinica-exemplo): a janela curta deixa testar tanto o
+  # cancelamento autônomo quanto o bloqueio de última hora no mesmo dia.
+  cancelamento_antecedencia_horas: 4
   feriados:
     # Um feriado DENTRO da janela de 30 dias — sem isso o caminho de feriado
     # nunca é exercitado num teste manual.
@@ -187,7 +190,7 @@ pagamento:
 
 faq:
   - pergunta: Como remarcar ou cancelar uma consulta?
-    resposta: Peça a remarcação ou o cancelamento por aqui e a recepção resolve, de preferência com 24h de antecedência.
+    resposta: Peça por aqui que eu mesmo resolvo, desde que falte mais de 4h para o atendimento. Em cima da hora, quem assume é a recepção.
   - pergunta: Preciso chegar adiantado?
     resposta: Chegue com 10 minutos de antecedência para o cadastro.
   - pergunta: Vocês fazem canal ou extração de siso?
@@ -214,12 +217,12 @@ handoff:
     - falar com alguém
     - falar com a recepção
   temas_sempre_humano:
+    # remarcacao e cancelamento saíram desta lista: agora existem ferramentas
+    # para os dois, e a política de antecedência é que decide o que vira humano.
     - reclamacao
     - cobranca
     - processo
     - assedio
-    - remarcacao
-    - cancelamento
     - convenio_nao_listado
     - documento_fiscal
   gatilhos:

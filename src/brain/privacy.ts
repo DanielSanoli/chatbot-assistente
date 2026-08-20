@@ -1,4 +1,8 @@
-import type { Store } from "../store/index.js";
+import { DateTime } from "luxon";
+import { logEvent, marcarAvisoLgpdEnviado, type Store } from "../store/index.js";
+import { deletePastAppointments } from "../store/appointments.js";
+import { deleteDemandasByWaId } from "../store/demandas.js";
+import { maskPhone } from "../channel/mask.js";
 import { normalizeTerm } from "./normalize.js";
 
 /**
@@ -11,7 +15,7 @@ import { normalizeTerm } from "./normalize.js";
 export const DELETE_CONFIRMATION_MESSAGE = [
   "Pronto, apaguei desta conversa o seu nome, as mensagens e o histórico de atendimento.",
   "",
-  "Se você já tinha um horário marcado, ele continua na agenda da clínica — para desmarcar, é só pedir por aqui e a recepção resolve.",
+  "Se você já tinha um horário marcado, ele continua na agenda da clínica — se quiser desmarcar, é só me pedir.",
 ].join("\n");
 
 /**
@@ -47,7 +51,25 @@ export type DeleteUserDataResult = {
   mensagens: number;
   /** True se havia uma conversa registrada para o wa_id. */
   conversaRemovida: boolean;
+  /** Agendamentos passados/cancelados removidos. Os futuros são preservados. */
+  agendamentosRemovidos: number;
+  /** Linhas da fila de retorno removidas (guardam telefone completo). */
+  demandasRemovidas: number;
 };
+
+/**
+ * Marca o aviso de LGPD como entregue.
+ *
+ * Chamado pelo canal DEPOIS de o envio ter sucesso, nunca pelo agente: se a
+ * Graph API falhar, o paciente não viu o aviso e o marcador não pode existir —
+ * senão ele nunca mais recebe.
+ */
+export function marcarAvisoLgpdEntregue(store: Store, waId: string): void {
+  marcarAvisoLgpdEnviado(store, waId);
+  logEvent(store, "lgpd.aviso_enviado", {
+    wa_id_masked: maskPhone(waId),
+  });
+}
 
 /**
  * Apaga tudo que existe do paciente: mensagens e depois a conversa.
@@ -55,15 +77,33 @@ export type DeleteUserDataResult = {
  * A ordem é obrigatória — db.ts liga `foreign_keys = ON` e messages referencia
  * conversations. Tudo numa transação para não deixar mensagem órfã se algo
  * falhar no meio.
+ *
+ * Agendamento futuro NÃO é apagado: é o compromisso que a clínica assumiu, e a
+ * mensagem de confirmação diz exatamente isso ao paciente. O que some é o
+ * histórico morto — consultas passadas, canceladas e remarcadas.
  */
-export function deleteUserData(store: Store, waId: string): DeleteUserDataResult {
+export function deleteUserData(
+  store: Store,
+  waId: string,
+  agora?: DateTime,
+): DeleteUserDataResult {
+  const now = agora ?? DateTime.now();
+
   const run = store.db.transaction((id: string): DeleteUserDataResult => {
+    const agendamentosRemovidos = deletePastAppointments(store, id, now);
+    const demandasRemovidas = deleteDemandasByWaId(store, id);
+
     const conv = store.db
       .prepare(`SELECT id FROM conversations WHERE wa_id = ?`)
       .get(id) as { id: number } | undefined;
 
     if (!conv) {
-      return { mensagens: 0, conversaRemovida: false };
+      return {
+        mensagens: 0,
+        conversaRemovida: false,
+        agendamentosRemovidos,
+        demandasRemovidas,
+      };
     }
 
     const removed = store.db
@@ -72,7 +112,12 @@ export function deleteUserData(store: Store, waId: string): DeleteUserDataResult
 
     store.db.prepare(`DELETE FROM conversations WHERE id = ?`).run(conv.id);
 
-    return { mensagens: removed.changes, conversaRemovida: true };
+    return {
+      mensagens: removed.changes,
+      conversaRemovida: true,
+      agendamentosRemovidos,
+      demandasRemovidas,
+    };
   });
 
   return run(waId);

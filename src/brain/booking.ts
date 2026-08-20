@@ -4,6 +4,11 @@ import { buscarHorarios } from "../calendar/slots.js";
 import type { ClientConfig } from "../config/schema.js";
 import { logEvent, type Store } from "../store/index.js";
 import {
+  getAppointment,
+  insertAppointment,
+  markAppointmentRescheduled,
+} from "../store/appointments.js";
+import {
   ensureConversation,
   getConversation,
   setConversationState,
@@ -204,17 +209,9 @@ async function slotStillFree(
   });
 }
 
-function formatConfirmationMessage(
-  ctx: BookingContext,
-  slot: ProposedSlot,
-  nome: string,
-  servicoNome: string,
-): string {
-  const tz = ctx.config.cliente.timezone;
-  const inicio = DateTime.fromISO(slot.inicio, { zone: tz });
-  const dia = WEEKDAY_PT[inicio.weekday] ?? "";
-  const local = ctx.config.local;
-  const endereco = [
+export function formatEndereco(config: ClientConfig): string {
+  const local = config.local;
+  return [
     local.endereco,
     local.complemento,
     local.bairro,
@@ -222,12 +219,33 @@ function formatConfirmationMessage(
   ]
     .filter(Boolean)
     .join(", ");
+}
+
+/** "quinta-feira, 06/08/2026 às 14:30" — usado em confirmação e cancelamento. */
+export function formatDataHora(iso: string, tz: string): string {
+  const inicio = DateTime.fromISO(iso, { zone: tz });
+  const dia = WEEKDAY_PT[inicio.weekday] ?? "";
+  return `${dia}, ${inicio.toFormat("dd/LL/yyyy")} às ${inicio.toFormat("HH:mm")}`;
+}
+
+function formatConfirmationMessage(
+  ctx: BookingContext,
+  slot: ProposedSlot,
+  nome: string,
+  servicoNome: string,
+  remarcado = false,
+): string {
+  const tz = ctx.config.cliente.timezone;
+  const inicio = DateTime.fromISO(slot.inicio, { zone: tz });
+  const dia = WEEKDAY_PT[inicio.weekday] ?? "";
 
   return [
-    `Agendamento confirmado, ${nome.split(" ")[0]}!`,
+    remarcado
+      ? `Pronto, ${nome.split(" ")[0]}, remarquei seu horário!`
+      : `Agendamento confirmado, ${nome.split(" ")[0]}!`,
     `${servicoNome} na ${dia}, ${inicio.toFormat("dd/LL/yyyy")}, às ${inicio.toFormat("HH:mm")}.`,
     `Profissional: ${slot.profissionalNome}.`,
-    `Local: ${endereco}.`,
+    `Local: ${formatEndereco(ctx.config)}.`,
   ].join("\n");
 }
 
@@ -294,6 +312,7 @@ export async function proporHorarios(
       nomeCompleto: conv.estado_payload.nomeCompleto,
       preferencia: input.preferencia,
       intencao: `agendar ${servicoId}`,
+      remarcandoId: conv.estado_payload.remarcandoId,
     });
     return {
       ok: false,
@@ -322,6 +341,7 @@ export async function proporHorarios(
     preferencia: input.preferencia,
     propostoEm: agora.toISO() ?? agora.toString(),
     slots: proposed,
+    remarcandoId: conv.estado_payload.remarcandoId,
   });
 
   logEvent(ctx.store, "booking.proposto", {
@@ -413,7 +433,11 @@ export async function confirmarAgendamento(
     };
   }
 
-  const nome = String(input.nomeCompleto ?? "").trim();
+  // Numa remarcação o nome já veio do agendamento original — não faz sentido
+  // pedir de novo a quem já é paciente da casa.
+  const nome =
+    String(input.nomeCompleto ?? "").trim() ||
+    (conv.estado_payload.nomeCompleto ?? "").trim();
   if (!isFullName(nome)) {
     setConversationState(ctx.store, ctx.waId, "COLETANDO", {
       ...conv.estado_payload,
@@ -536,7 +560,56 @@ export async function confirmarAgendamento(
     description: `Agendado via WhatsApp.\nTelefone: ${ctx.waId}\nProfissional: ${slot.profissionalNome}`,
   });
 
-  const mensagem = formatConfirmationMessage(ctx, slot, nome, servico.nome);
+  const fimFinal = duracaoOk ? fim : fimEsperado;
+  const remarcandoId = conv.estado_payload.remarcandoId;
+  const anterior = remarcandoId
+    ? getAppointment(ctx.store, remarcandoId)
+    : null;
+
+  const appointment = insertAppointment(ctx.store, {
+    waId: ctx.waId,
+    servicoId: slot.servicoId,
+    servicoNome: servico.nome,
+    profissionalId: slot.profissionalId,
+    profissionalNome: slot.profissionalNome,
+    calendarioId: slot.calendarioId,
+    eventId: created.id,
+    inicio: slot.inicio,
+    fim: fimFinal.toISO() ?? slot.fim,
+    nome,
+    remarcadoDeId: anterior?.id ?? null,
+  });
+
+  // Remarcação: o evento novo já existe, então agora dá para soltar o antigo.
+  // Nesta ordem de propósito — se a remoção falhar, o paciente fica com horário
+  // a mais, nunca com horário a menos.
+  let remarcado = false;
+  if (anterior && anterior.status === "CONFIRMADO") {
+    remarcado = true;
+    try {
+      await ctx.calendar.deleteEvent({
+        calendarId: anterior.calendarioId,
+        eventId: anterior.eventId,
+      });
+    } catch (err) {
+      logEvent(ctx.store, "booking.remarcacao_evento_orfao", {
+        wa_id_masked: maskPhone(ctx.waId),
+        event_id_antigo: anterior.eventId,
+        calendario_id: anterior.calendarioId,
+        inicio_antigo: anterior.inicio,
+        erro: err instanceof Error ? err.message : String(err),
+      });
+    }
+    markAppointmentRescheduled(ctx.store, anterior.id);
+  }
+
+  const mensagem = formatConfirmationMessage(
+    ctx,
+    slot,
+    nome,
+    servico.nome,
+    remarcado,
+  );
 
   setConversationState(ctx.store, ctx.waId, "CONFIRMADO", {
     servicoId: slot.servicoId,
@@ -546,23 +619,32 @@ export async function confirmarAgendamento(
     propostoEm: conv.estado_payload.propostoEm,
   });
 
-  logEvent(ctx.store, "booking.confirmado", {
+  logEvent(ctx.store, remarcado ? "booking.remarcado" : "booking.confirmado", {
     wa_id_masked: maskPhone(ctx.waId),
     event_id: created.id,
+    agendamento_id: appointment.id,
     inicio: slot.inicio,
-    fim: (duracaoOk ? fim : fimEsperado).toISO(),
+    fim: fimFinal.toISO(),
     duracao_min: servico.duracao_min,
     profissionalId: slot.profissionalId,
+    ...(remarcado
+      ? {
+          agendamento_anterior_id: anterior?.id,
+          inicio_anterior: anterior?.inicio,
+        }
+      : {}),
   });
 
   return {
     ok: true,
     agendado: true,
+    remarcado,
     estado: "CONFIRMADO",
+    agendamentoId: appointment.id,
     eventId: created.id,
     titulo: title,
     inicio: inicio.toISO(),
-    fim: (duracaoOk ? fim : fimEsperado).toISO(),
+    fim: fimFinal.toISO(),
     duracao_min: servico.duracao_min,
     profissional: slot.profissionalNome,
     mensagem_cliente: mensagem,

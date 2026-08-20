@@ -8,6 +8,7 @@ export {
   type FreeBusyQuery,
   type CreateCalendarEventInput,
   type CreatedCalendarEvent,
+  type DeleteCalendarEventInput,
 } from "./google.js";
 
 export {

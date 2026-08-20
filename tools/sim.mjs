@@ -102,7 +102,41 @@ function reset() {
   const del = db.prepare(`DELETE FROM messages WHERE conversation_id = ?`);
   for (const id of ids) del.run(id);
   db.prepare(`DELETE FROM conversations WHERE wa_id IN (?, ?)`).run(PHONE, PHONE_B);
+  // Sem isto o agendamento de um teste anterior continua "ativo" e o bot passa
+  // a responder sobre uma consulta que não existe mais no Calendar.
+  if (temTabela('appointments')) {
+    db.prepare(`DELETE FROM appointments WHERE wa_id IN (?, ?)`).run(PHONE, PHONE_B);
+  }
+  if (temTabela('demandas')) {
+    db.prepare(`DELETE FROM demandas WHERE wa_id IN (?, ?)`).run(PHONE, PHONE_B);
+  }
   return true;
+}
+
+/** As tabelas nascem na migração do server; o simulador pode abrir o .db antes. */
+function temTabela(nome) {
+  if (!db) return false;
+  return !!db.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
+  ).get(nome);
+}
+
+/** Fila de retorno do número de teste — o telefone saiu de events e veio pra cá. */
+function demandas(waId = PHONE) {
+  if (!temTabela('demandas')) return [];
+  return db.prepare(
+    `SELECT id, servico_id, janela_desejada, status, criado_em
+       FROM demandas WHERE wa_id = ? ORDER BY criado_em ASC`,
+  ).all(waId);
+}
+
+/** Agendamentos ativos do número de teste — o que o bot enxerga. */
+function agendamentos(waId = PHONE) {
+  if (!temTabela('appointments')) return [];
+  return db.prepare(
+    `SELECT id, servico_nome, inicio, profissional_nome, status
+       FROM appointments WHERE wa_id = ? ORDER BY inicio ASC`,
+  ).all(waId);
 }
 
 function estadoAtual(waId = PHONE) {
@@ -117,15 +151,22 @@ function eventos(tipo, limite = 10) {
   ).all(tipo, limite);
 }
 
-/** Encerra o silêncio de 12h sem esperar (usado no cenário 3.13). */
+/** Encerra o silêncio de 12h sem esperar (usado no cenário 3.13 e no /destravar). */
 function encerrarSilencio(waId = PHONE) {
   if (!db) return false;
-  const row = db.prepare(`SELECT estado_payload FROM conversations WHERE wa_id = ?`).get(waId);
+  const row = db.prepare(
+    `SELECT estado, estado_payload FROM conversations WHERE wa_id = ?`,
+  ).get(waId);
   if (!row) return false;
-  const payload = JSON.parse(row.estado_payload || '{}');
-  payload.emHumanoDesde = new Date(Date.now() - 13 * 3600 * 1000).toISOString();
-  db.prepare(`UPDATE conversations SET estado_payload = ? WHERE wa_id = ?`)
-    .run(JSON.stringify(payload), waId);
+  // Volta para LIVRE: só envelhecer emHumanoDesde falha se o próximo turno
+  // cair de novo em handoff (ex.: erro_interno) e renovar o mute.
+  db.prepare(
+    `UPDATE conversations
+        SET estado = 'LIVRE',
+            estado_payload = '{}',
+            atualizado_em = datetime('now')
+      WHERE wa_id = ?`,
+  ).run(waId);
   return true;
 }
 
@@ -445,10 +486,70 @@ const CENARIOS = {
         check: contem('texto'), esperado: 'Responde UNSUPPORTED_MEDIA_REPLY.' },
     ],
   },
+
+  '3.24': {
+    nome: 'Cancelamento em dois passos',
+    passos: [
+      { msg: 'oi, queria marcar uma limpeza', novaConversa: true },
+      { msg: 'meu nome é Daniel Sanoli, pode ser a opção 3',
+        esperado: 'Confirma o agendamento. Escolha a opção mais distante para o cancelamento caber na janela de 4h.' },
+      { msg: 'preciso desmarcar minha consulta',
+        check: naoContem('cancelado', 'cancelei', 'desmarcado'),
+        esperado: 'LÊ o horário de volta e PERGUNTA se confirma. Ainda não cancelou.' },
+      { msg: 'sim, pode cancelar',
+        check: contem('cancelad'),
+        esperado: 'Agora sim: evento sai do Calendar.' },
+    ],
+    manual: 'Confira no Calendar da Dra. Ana que o evento sumiu.',
+    depois: () => {
+      const [ev] = eventos('booking.cancelado', 1);
+      return ev ? `booking.cancelado registrado: ${ev.payload_json.slice(0, 120)}`
+        : `${c.red}✗ nenhum evento booking.cancelado${c.reset}`;
+    },
+  },
+
+  '3.25': {
+    nome: 'Remarcação troca o horário sem perder a vaga',
+    passos: [
+      { msg: 'quero marcar uma limpeza', novaConversa: true },
+      { msg: 'Daniel Sanoli, opção 3' },
+      { msg: 'na verdade preciso mudar o horário dessa consulta',
+        check: naoContem('cancelad'),
+        esperado: 'Oferece horários novos SEM cancelar o antigo e SEM pedir o nome de novo.' },
+      { msg: 'a opção 1 então',
+        check: contem('remarquei', 'remarcad', 'novo horário', 'novo horario'),
+        esperado: 'Cria o novo evento e só então apaga o antigo.' },
+    ],
+    manual: 'No Calendar da Dra. Ana deve sobrar exatamente 1 evento, no horário novo.',
+    depois: () => {
+      const [ev] = eventos('booking.remarcado', 1);
+      const orfaos = eventos('booking.remarcacao_evento_orfao', 3);
+      if (orfaos.length) return `${c.red}✗ evento antigo ficou na agenda (limpe à mão)${c.reset}`;
+      return ev ? `booking.remarcado registrado` : `${c.red}✗ nenhum evento booking.remarcado${c.reset}`;
+    },
+  },
+
+  '3.26': {
+    nome: 'Cancelar em cima da hora vai para a recepção',
+    passos: [
+      { msg: 'oi, queria marcar uma limpeza pro horário mais cedo possível', novaConversa: true },
+      { msg: 'Daniel Sanoli, opção 1',
+        esperado: 'Precisa cair dentro das próximas 4h — rode em dia útil, com a agenda vazia.' },
+      { msg: 'não vou conseguir ir, cancela pra mim',
+        check: naoContem('cancelado', 'cancelei'),
+        esperado: 'NÃO cancela: transfere para a recepção (política de antecedência).' },
+    ],
+    manual: 'Se a opção 1 tiver caído para amanhã, este cenário não se aplica — o bot cancela mesmo, e está certo.',
+    depois: () => {
+      const tardio = eventos('booking.cancelamento_tardio', 1);
+      return tardio.length ? 'booking.cancelamento_tardio registrado'
+        : `${c.yellow}(nenhum cancelamento_tardio — o horário provavelmente estava fora da janela de 4h)${c.reset}`;
+    },
+  },
 };
 
 const MANUAIS = {
-  '3.1': 'LGPD: o código NÃO tem aviso de primeira mensagem, comando "excluir meus dados" nem expurgo de 180 dias. Não é bug de teste — é escopo não implementado. Bloqueia o piloto em clínica (dado de saúde é sensível).',
+  '3.1': 'LGPD: aviso na primeira mensagem, comando "excluir meus dados" e expurgo por retenção já existem. Teste à mão: primeira mensagem de um número novo traz o aviso, a segunda não; "excluir meus dados" apaga a conversa mas PRESERVA o horário futuro; `npm run expurgo` limpa o que passou de retencao_dias.',
   '3.11': 'Agenda duplicada (P1): rode `chat`, peça limpeza, receba os horários, ocupe o slot À MÃO no Calendar da Dra. Ana, e só então confirme. Esperado: motivo slot_tomado, repropõe, nenhum evento criado.',
   '3.12': 'Precedência da equipe (Regra 3): edite e apague eventos criados pelo bot no Calendar. Esperado: nada quebra.',
   '3.16': 'Fora do expediente: mande mensagem depois das 19h. Esperado: agenda normalmente; só o HANDOFF usa handoff.fora_do_horario.',
@@ -575,7 +676,7 @@ async function runSecurity() {
 
 async function runChat() {
   console.log(`\n${c.bold}chat${c.reset} ${c.gray}· ${WEBHOOK_URL} · captura :${CAPTURE_PORT} · ${PHONE}${c.reset}`);
-  console.log(`${c.gray}/reset  /estado  /eventos <tipo>  /destravar  /quem <num>  /sair${c.reset}\n`);
+  console.log(`${c.gray}/reset  /estado  /agendamentos  /demandas  /eventos <tipo>  /destravar  /quem <num>  /sair${c.reset}\n`);
   let from = PHONE;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const ask = () => new Promise((r) => rl.question(`${c.cyan}paciente > ${c.reset}`, r));
@@ -586,7 +687,27 @@ async function runChat() {
     if (l === '/sair') break;
     if (l === '/reset') { reset(); console.log(`${c.gray}limpo${c.reset}`); continue; }
     if (l === '/estado') { console.log(`${c.gray}${JSON.stringify(estadoAtual(from))}${c.reset}`); continue; }
-    if (l === '/destravar') { encerrarSilencio(from); console.log(`${c.gray}silêncio encerrado${c.reset}`); continue; }
+    if (l === '/demandas') {
+      const lista = demandas(from);
+      if (!lista.length) console.log(`${c.gray}nenhuma demanda para ${from}${c.reset}`);
+      for (const d of lista) {
+        console.log(`${c.gray}#${d.id} ${d.status} ${d.servico_id} | janela: ${d.janela_desejada ?? '—'} | ${d.criado_em}${c.reset}`);
+      }
+      continue;
+    }
+    if (l === '/agendamentos') {
+      const lista = agendamentos(from);
+      if (!lista.length) console.log(`${c.gray}nenhum agendamento para ${from}${c.reset}`);
+      for (const a of lista) {
+        console.log(`${c.gray}#${a.id} ${a.status} ${a.inicio} ${a.servico_nome} (${a.profissional_nome})${c.reset}`);
+      }
+      continue;
+    }
+    if (l === '/destravar') {
+      if (!encerrarSilencio(from)) console.log(`${c.yellow}nenhuma conversa para ${from}${c.reset}`);
+      else console.log(`${c.gray}silêncio encerrado → LIVRE${c.reset}`);
+      continue;
+    }
     if (l.startsWith('/eventos ')) {
       for (const e of eventos(l.slice(9).trim(), 5)) console.log(`${c.gray}${e.criado_em} ${e.payload_json.slice(0, 160)}${c.reset}`);
       continue;
@@ -595,7 +716,17 @@ async function runChat() {
 
     const { replies, erro } = await send(l, { from });
     if (erro) { console.log(`${c.red}  ✗ ${erro}${c.reset}`); continue; }
-    if (!replies.length) console.log(`${c.gray}bot      > (silêncio — handoff ativo? use /destravar)${c.reset}`);
+    if (!replies.length) {
+      const st = estadoAtual(from);
+      const muted = st?.estado === 'EM_HUMANO';
+      if (muted) {
+        console.log(`${c.gray}bot      > (silêncio: conversa em EM_HUMANO — use /destravar ou /reset)${c.reset}`);
+      } else if (!process.env.GRAPH_API_BASE) {
+        console.log(`${c.yellow}bot      > (sem resposta capturada: GRAPH_API_BASE não está no .env — use http://localhost:4000 e reinicie o npm run dev)${c.reset}`);
+      } else {
+        console.log(`${c.gray}bot      > (sem resposta em ${REPLY_TIMEOUT_MS / 1000}s — veja o log do npm run dev; estado=${st?.estado ?? '—'})${c.reset}`);
+      }
+    }
     for (const r of replies) console.log(`${c.green}bot      >${c.reset} ${r.text.replace(/\n/g, '\n           ')}`);
   }
   rl.close();

@@ -228,6 +228,32 @@ npm run sim run 3.10 3.13 3.14 3.15 3.17 3.19 3.21 3.23
 npm run sim:all
 ```
 
+**Horário já marcado (3.24, 3.25, 3.26).** Estes três dependem de um agendamento
+criado no próprio cenário, então rode-os com a agenda das duas doutoras vazia:
+
+```bash
+npm run sim run 3.24 3.25 3.26
+```
+
+O que observar, além do que o simulador confere sozinho:
+
+- **3.24** — na terceira mensagem o bot tem que *ler o horário de volta e
+  perguntar*. Se ele responder "cancelado" de primeira, o passo dois da
+  confirmação foi ignorado e é bug.
+- **3.25** — durante a remarcação o evento antigo continua no Calendar. Ele só
+  pode sumir depois de o novo existir. Se em algum instante a agenda ficar sem
+  nenhum dos dois, é bug grave: o paciente perdeu a vaga.
+- **3.26** — depende de o primeiro horário livre cair dentro das próximas 4h
+  (`cancelamento_antecedencia_horas` da `clinica-teste`). Fora disso o bot
+  cancela sozinho — e está certo.
+
+Para ver o que o bot enxerga de agendamento a qualquer momento:
+
+```bash
+npm run sim chat
+paciente > /agendamentos
+```
+
 **Como ler.** As falhas automáticas são objetivas — corrija. O resto o simulador
 imprime lado a lado (pergunta, resposta, "esperado") para seu julgamento. Leia
 cada uma perguntando *"como paciente, isso me satisfaz ou me irrita?"*.
@@ -244,10 +270,26 @@ Depois de 3.10 e 3.17, confirme o registro:
 
 ```bash
 npm run sim chat
-paciente > /eventos demanda_nao_atendida
+paciente > /demandas
 ```
 
 Vazio aqui = 30 dias de piloto sem a matéria-prima da reocupação do V1.
+
+O telefone completo agora vive na tabela `demandas` (é lista de retorno: quando
+abrir vaga, alguém liga), e não mais no evento. `/eventos demanda_nao_atendida`
+continua funcionando, mas só mostra o telefone mascarado — se aparecer número
+completo ali, é regressão.
+
+**Saúde do serviço.** `/health` responde `degradado: true` quando houve erro de
+Claude ou falha de envio na última hora:
+
+```bash
+curl -s localhost:3000/health
+```
+
+Isso existe por causa de um modo de falha real: com a chave da Anthropic sem
+crédito, todo turno vira handoff e o paciente fica mudo 12h — sem nenhum erro
+visível. `degradado: true` com `erros_claude` alto é esse cenário.
 
 ---
 

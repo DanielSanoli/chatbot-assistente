@@ -95,6 +95,12 @@ export const AgendaSchema = z.object({
   janela_maxima_dias: z.number().int().positive(),
   /** Grade de início dos slots (minutos). */
   passo_grade_min: z.number().int().positive().default(15),
+  /**
+   * Antecedência mínima para o assistente cancelar/remarcar sozinho. Abaixo
+   * dela a decisão é da recepção (política de multa, encaixe, no-show), então
+   * o pedido vira handoff em vez de virar buraco na agenda.
+   */
+  cancelamento_antecedencia_horas: z.number().nonnegative().default(4),
   /** Datas ISO YYYY-MM-DD no timezone do cliente. */
   feriados: z
     .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "feriado deve ser YYYY-MM-DD"))

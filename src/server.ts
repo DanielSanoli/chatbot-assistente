@@ -5,8 +5,12 @@ import { ConfigService } from "./config/index.js";
 import { ConfigLoadError } from "./config/load.js";
 import { createWhatsappChannel } from "./channel/index.js";
 import { createGoogleCalendarClient } from "./calendar/index.js";
-import { createBrain, transferToHuman } from "./brain/index.js";
-import { openStore, logEvent } from "./store/index.js";
+import {
+  createBrain,
+  marcarAvisoLgpdEntregue,
+  transferToHuman,
+} from "./brain/index.js";
+import { openStore, logEvent, countEventsSince } from "./store/index.js";
 import { purgeFromConfig } from "./jobs/purge.js";
 import { maskPhone } from "./channel/mask.js";
 import { DateTime } from "luxon";
@@ -113,6 +117,10 @@ async function main(): Promise<void> {
           return;
         }
         await whatsapp.sendText(waId, turn.reply);
+        // Só agora o aviso de LGPD existe de fato para o paciente.
+        if (turn.avisoLgpdPendente) {
+          marcarAvisoLgpdEntregue(store, waId);
+        }
       } catch (err) {
         app.log.error(
           {
@@ -156,19 +164,42 @@ async function main(): Promise<void> {
   sendText = whatsapp.sendText.bind(whatsapp);
   whatsapp.registerRoutes(app);
 
-  app.get("/health", async () => ({
-    ok: true,
-    cliente: config.cliente.id,
-    timezone: config.cliente.timezone,
-  }));
+  /**
+   * `ok` responde "o processo está de pé". `degradado` responde a pergunta que
+   * o log de chat expôs: com a chave da Anthropic sem crédito, TODA mensagem
+   * vira handoff e o paciente fica mudo 12h — e nada disso aparece como erro.
+   * Falha de envio entra junto: o webhook já respondeu 200, ninguém reenvia.
+   */
+  app.get("/health", async () => {
+    const desde = DateTime.utc().minus({ hours: 1 }).toFormat("yyyy-LL-dd HH:mm:ss");
+    const errosClaude = countEventsSince(store, ["brain.claude_error", "brain.error"], desde);
+    const falhasEnvio = countEventsSince(store, ["whatsapp.send_failed"], desde);
+
+    return {
+      ok: true,
+      degradado: errosClaude > 0 || falhasEnvio > 0,
+      cliente: config.cliente.id,
+      timezone: config.cliente.timezone,
+      ultima_hora: {
+        erros_claude: errosClaude,
+        falhas_envio: falhasEnvio,
+      },
+    };
+  });
 
   // Expurgo LGPD: uma vez no boot e a cada 24h.
   const runPurge = () => {
     try {
       const result = purgeFromConfig(store, config);
-      if (result.conversas > 0) {
+      if (result.conversas > 0 || result.eventos > 0 || result.demandas > 0) {
         app.log.info(
-          { conversas: result.conversas, mensagens: result.mensagens },
+          {
+            conversas: result.conversas,
+            mensagens: result.mensagens,
+            eventos: result.eventos,
+            demandas: result.demandas,
+            agendamentos: result.agendamentos,
+          },
           "expurgo lgpd concluído",
         );
       }

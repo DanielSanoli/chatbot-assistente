@@ -50,6 +50,9 @@ function fakeCalendar(
     async createEvent() {
       throw new Error("createEvent não deve ser chamado neste teste");
     },
+    async deleteEvent() {
+      throw new Error("deleteEvent não deve ser chamado neste teste");
+    },
   };
 }
 

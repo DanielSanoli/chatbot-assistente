@@ -42,8 +42,10 @@ export {
 export {
   detectDeleteRequest,
   deleteUserData,
+  scrubUserTextFromEvents,
   marcarAvisoLgpdEntregue,
   DELETE_CONFIRMATION_MESSAGE,
+  TEXTO_EXPURGADO,
   type DeleteUserDataResult,
 } from "./privacy.js";
 export type { ClaudeClient } from "./claude.js";

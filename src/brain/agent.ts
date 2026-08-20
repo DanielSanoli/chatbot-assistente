@@ -182,6 +182,7 @@ export function createAgent(deps: AgentDeps) {
       logEvent(deps.store, "lgpd.exclusao_solicitada", {
         wa_id_masked: maskPhone(waId),
         mensagens_removidas: removed.mensagens,
+        eventos_expurgados: removed.eventosExpurgados,
       });
       return {
         reply: DELETE_CONFIRMATION_MESSAGE,

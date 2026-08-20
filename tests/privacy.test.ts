@@ -6,15 +6,22 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createAgent } from "../src/brain/agent.js";
 import {
   DELETE_CONFIRMATION_MESSAGE,
+  TEXTO_EXPURGADO,
   deleteUserData,
   detectDeleteRequest,
 } from "../src/brain/privacy.js";
 import { purgeOldConversations } from "../src/jobs/purge.js";
 import type { CalendarClient } from "../src/calendar/google.js";
 import { ConfigService } from "../src/config/index.js";
+import { maskPhone } from "../src/channel/mask.js";
+import {
+  computeWeeklyReport,
+  formatWeeklyReportText,
+} from "../src/reports/weekly.js";
 import {
   insertDemanda,
   listDemandasAbertas,
+  logEvent,
   openStore,
   setConversationState,
   tryInsertMessage,
@@ -104,6 +111,13 @@ function countRows(store: Store, waId: string): { conversas: number; mensagens: 
   return { conversas, mensagens };
 }
 
+function countByTipo(store: Store): Record<string, number> {
+  const rows = store.db
+    .prepare(`SELECT tipo, COUNT(*) AS n FROM events GROUP BY tipo`)
+    .all() as Array<{ tipo: string; n: number }>;
+  return Object.fromEntries(rows.map((r) => [r.tipo, r.n]));
+}
+
 // ---------------------------------------------------------------------------
 
 describe("detectDeleteRequest", () => {
@@ -170,6 +184,7 @@ describe("deleteUserData", () => {
       conversaRemovida: false,
       agendamentosRemovidos: 0,
       demandasRemovidas: 0,
+      eventosExpurgados: 0,
     });
   });
 });
@@ -233,6 +248,139 @@ describe("exclusão pelo agente", () => {
     expect(serialized).not.toContain("Fulano");
     expect(serialized).not.toContain("cárie");
     expect(eventos[0]?.mensagens_removidas).toBe(1);
+    expect(typeof eventos[0]?.eventos_expurgados).toBe("number");
+  });
+});
+
+describe("expurgo de texto em events a pedido do titular", () => {
+  function makeAgent(store: Store, config: ReturnType<typeof ConfigService.load>) {
+    return createAgent({
+      store,
+      claude: createScriptedClaude([
+        () => textResult("nunca deveria ser chamado neste teste"),
+      ]),
+      calendar: noopCalendar(),
+      notifyHuman: async () => undefined,
+      getConfig: () => config,
+      now: () => new Date("2026-07-28T12:00:00-03:00"),
+    });
+  }
+
+  it("após exclusão nenhum evento guarda a frase do paciente e a contagem por tipo permanece", async () => {
+    const { store, config } = setup();
+    const waId = "5511900000040";
+    const frase = "estou com muita dor no siso, sangrando";
+    seedInbound(store, waId, frase);
+
+    const agent = makeAgent(store, config);
+    const handoff = await agent.handleUserMessage(waId, frase);
+    expect(handoff.handoff).toBe(true);
+
+    const payloadsAntes = store.db
+      .prepare(`SELECT payload_json FROM events`)
+      .all() as Array<{ payload_json: string }>;
+    expect(payloadsAntes.some((r) => r.payload_json.includes("sangrando"))).toBe(
+      true,
+    );
+    const contagemAntes = countByTipo(store);
+
+    const exclusao = await agent.handleUserMessage(waId, "excluir meus dados");
+    expect(exclusao.reply).toBe(DELETE_CONFIRMATION_MESSAGE);
+
+    const payloads = store.db
+      .prepare(`SELECT payload_json FROM events`)
+      .all() as Array<{ payload_json: string }>;
+    for (const row of payloads) {
+      expect(row.payload_json).not.toContain(frase);
+      expect(row.payload_json).not.toContain("sangrando");
+      expect(row.payload_json).not.toContain("muita dor no siso");
+    }
+
+    const transferido = eventsOfType(store, "handoff.transferido")[0];
+    expect(transferido?.user_text).toBe(TEXTO_EXPURGADO);
+    expect(transferido?.intencao).toBe(TEXTO_EXPURGADO);
+    expect(transferido?.motivo).toBe("urgencia_clinica");
+
+    const contagemDepois = countByTipo(store);
+    for (const [tipo, n] of Object.entries(contagemAntes)) {
+      expect(contagemDepois[tipo], tipo).toBe(n);
+    }
+    expect(contagemDepois["lgpd.exclusao_solicitada"]).toBe(1);
+
+    const exclusaoEvento = eventsOfType(store, "lgpd.exclusao_solicitada")[0];
+    expect(exclusaoEvento?.eventos_expurgados).toBeGreaterThan(0);
+    expect(JSON.stringify(exclusaoEvento)).not.toContain(frase);
+    expect(JSON.stringify(exclusaoEvento)).not.toContain(waId);
+  });
+
+  it("não altera events de outro wa_id", () => {
+    const { store } = setup();
+    const titular = "5511900000041";
+    const outro = "5511900000042";
+    logEvent(store, "handoff.transferido", {
+      wa_id_masked: maskPhone(titular),
+      motivo: "urgencia_clinica",
+      user_text: "frase do titular sobre cárie",
+      intencao: "frase do titular sobre cárie",
+    });
+    logEvent(store, "handoff.transferido", {
+      wa_id_masked: maskPhone(outro),
+      motivo: "urgencia_clinica",
+      user_text: "frase do vizinho sobre implante",
+      intencao: "frase do vizinho sobre implante",
+    });
+
+    const result = deleteUserData(store, titular);
+    expect(result.eventosExpurgados).toBe(1);
+
+    const payloads = store.db
+      .prepare(`SELECT payload_json FROM events WHERE tipo = ?`)
+      .all("handoff.transferido") as Array<{ payload_json: string }>;
+    const doTitular = payloads.find((r) =>
+      r.payload_json.includes(maskPhone(titular)),
+    );
+    const doOutro = payloads.find((r) =>
+      r.payload_json.includes(maskPhone(outro)),
+    );
+    expect(doTitular?.payload_json).toContain(TEXTO_EXPURGADO);
+    expect(doTitular?.payload_json).not.toContain("cárie");
+    expect(doOutro?.payload_json).toContain("frase do vizinho sobre implante");
+    expect(doOutro?.payload_json).not.toContain(TEXTO_EXPURGADO);
+  });
+
+  it("relatório semanal continua gerando e conta o handoff após o expurgo", () => {
+    const { store } = setup();
+    const waId = "5511900000043";
+    const criadoEm = "2026-07-28T15:00:00.000Z";
+    store.db
+      .prepare(
+        `INSERT INTO events (tipo, payload_json, criado_em) VALUES (?, ?, ?)`,
+      )
+      .run(
+        "handoff.transferido",
+        JSON.stringify({
+          wa_id_masked: maskPhone(waId),
+          motivo: "urgencia_clinica",
+          user_text: "estou com muita dor no siso, sangrando",
+          intencao: "estou com muita dor no siso, sangrando",
+          notificacao_ok: true,
+        }),
+        criadoEm,
+      );
+
+    deleteUserData(store, waId);
+
+    const data = computeWeeklyReport(
+      store,
+      DateTime.fromISO("2026-07-28T12:00:00", { zone: TZ }),
+    );
+    expect(data.handoffMotivos.some((m) => m.motivo === "urgencia_clinica")).toBe(
+      true,
+    );
+    const texto = formatWeeklyReportText(data);
+    expect(texto.length).toBeGreaterThan(0);
+    expect(texto).not.toContain("sangrando");
+    expect(texto).not.toContain("muita dor no siso");
   });
 });
 

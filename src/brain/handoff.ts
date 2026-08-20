@@ -223,7 +223,7 @@ export async function transferToHuman(
     wa_id_masked: maskPhone(input.waId),
     motivo: input.motivo,
     intencao: payload.intencao ?? null,
-    user_text: input.userText ?? null,
+    user_text: input.userText ? input.userText.slice(0, 280) : null,
     numero_humano_masked: maskPhone(input.config.handoff.numero_humano),
     dentro_horario: isWithinBusinessHours(input.config, agora),
     notificacao_ok: notificacaoOk,

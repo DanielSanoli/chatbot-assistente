@@ -46,6 +46,10 @@ export function detectDeleteRequest(text: string): boolean {
   return DELETE_PHRASES.some((phrase) => normalized.includes(phrase));
 }
 
+export const TEXTO_EXPURGADO = "[expurgado a pedido do titular]";
+
+const CAMPOS_TEXTO = new Set(["user_text", "intencao", "texto"]);
+
 export type DeleteUserDataResult = {
   /** Mensagens removidas. 0 se o wa_id não existia. */
   mensagens: number;
@@ -55,7 +59,78 @@ export type DeleteUserDataResult = {
   agendamentosRemovidos: number;
   /** Linhas da fila de retorno removidas (guardam telefone completo). */
   demandasRemovidas: number;
+  /** Linhas de events cujo texto livre foi substituído pelo marcador. */
+  eventosExpurgados: number;
 };
+
+function deveExpurgarCampo(key: string): boolean {
+  return CAMPOS_TEXTO.has(key) || key.endsWith("_text");
+}
+
+function scrubValue(value: unknown): { next: unknown; changed: boolean } {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const inner = scrubValue(item);
+      if (inner.changed) changed = true;
+      return inner.next;
+    });
+    return { next, changed };
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const next: Record<string, unknown> = {};
+    let changed = false;
+    for (const [key, val] of Object.entries(obj)) {
+      if (
+        deveExpurgarCampo(key) &&
+        typeof val === "string" &&
+        val !== TEXTO_EXPURGADO
+      ) {
+        next[key] = TEXTO_EXPURGADO;
+        changed = true;
+        continue;
+      }
+      const inner = scrubValue(val);
+      next[key] = inner.next;
+      if (inner.changed) changed = true;
+    }
+    return { next, changed };
+  }
+  return { next: value, changed: false };
+}
+
+/**
+ * Substitui texto livre do titular em `events` por marcador de expurgo.
+ *
+ * Não apaga a linha: tipo, motivo e criado_em ficam para o relatório semanal.
+ * Casa eventos pelo wa_id_masked — é o identificador que o log de auditoria
+ * realmente guarda.
+ */
+export function scrubUserTextFromEvents(store: Store, waId: string): number {
+  const masked = maskPhone(waId);
+  const rows = store.db
+    .prepare(`SELECT id, payload_json FROM events WHERE payload_json LIKE ?`)
+    .all(`%${masked}%`) as Array<{ id: number; payload_json: string }>;
+
+  const update = store.db.prepare(
+    `UPDATE events SET payload_json = ? WHERE id = ?`,
+  );
+  let alteradas = 0;
+  for (const row of rows) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.payload_json);
+    } catch {
+      continue;
+    }
+    const { next, changed } = scrubValue(parsed);
+    if (!changed) continue;
+    update.run(JSON.stringify(next), row.id);
+    alteradas += 1;
+  }
+  return alteradas;
+}
 
 /**
  * Marca o aviso de LGPD como entregue.
@@ -92,6 +167,7 @@ export function deleteUserData(
   const run = store.db.transaction((id: string): DeleteUserDataResult => {
     const agendamentosRemovidos = deletePastAppointments(store, id, now);
     const demandasRemovidas = deleteDemandasByWaId(store, id);
+    const eventosExpurgados = scrubUserTextFromEvents(store, id);
 
     const conv = store.db
       .prepare(`SELECT id FROM conversations WHERE wa_id = ?`)
@@ -103,6 +179,7 @@ export function deleteUserData(
         conversaRemovida: false,
         agendamentosRemovidos,
         demandasRemovidas,
+        eventosExpurgados,
       };
     }
 
@@ -117,6 +194,7 @@ export function deleteUserData(
       conversaRemovida: true,
       agendamentosRemovidos,
       demandasRemovidas,
+      eventosExpurgados,
     };
   });
 

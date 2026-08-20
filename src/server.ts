@@ -88,7 +88,9 @@ async function main(): Promise<void> {
   let sendText!: (waId: string, texto: string) => Promise<void>;
 
   const notifyHuman = async (numeroHumano: string, resumo: string) => {
-    await sendText(numeroHumano.replace(/\D/g, ""), resumo);
+    await sendText(numeroHumano.replace(/\D/g, ""), resumo, {
+      destino: "humano",
+    });
   };
 
   const brain = createBrain({
@@ -169,20 +171,28 @@ async function main(): Promise<void> {
    * o log de chat expôs: com a chave da Anthropic sem crédito, TODA mensagem
    * vira handoff e o paciente fica mudo 12h — e nada disso aparece como erro.
    * Falha de envio entra junto: o webhook já respondeu 200, ninguém reenvia.
+   * Falha de notificação da recepção: o paciente já está em EM_HUMANO e mudo;
+   * se isso some, a clínica atende no escuro.
    */
   app.get("/health", async () => {
     const desde = DateTime.utc().minus({ hours: 1 }).toFormat("yyyy-LL-dd HH:mm:ss");
     const errosClaude = countEventsSince(store, ["brain.claude_error", "brain.error"], desde);
     const falhasEnvio = countEventsSince(store, ["whatsapp.send_failed"], desde);
+    const falhasNotificacao = countEventsSince(
+      store,
+      ["handoff.notificacao_falhou"],
+      desde,
+    );
 
     return {
       ok: true,
-      degradado: errosClaude > 0 || falhasEnvio > 0,
+      degradado: errosClaude > 0 || falhasEnvio > 0 || falhasNotificacao > 0,
       cliente: config.cliente.id,
       timezone: config.cliente.timezone,
       ultima_hora: {
         erros_claude: errosClaude,
         falhas_envio: falhasEnvio,
+        handoff_notificacao_falhou: falhasNotificacao,
       },
     };
   });

@@ -202,7 +202,22 @@ export async function transferToHuman(
     motivo: input.motivo,
   });
 
-  await input.notifyHuman(input.config.handoff.numero_humano, humanSummary);
+  let notificacaoOk = true;
+  try {
+    await input.notifyHuman(input.config.handoff.numero_humano, humanSummary);
+  } catch (err) {
+    notificacaoOk = false;
+    const erro = (err instanceof Error ? err.message : String(err)).slice(
+      0,
+      200,
+    );
+    logEvent(input.store, "handoff.notificacao_falhou", {
+      wa_id_masked: maskPhone(input.waId),
+      motivo: input.motivo,
+      numero_humano_masked: maskPhone(input.config.handoff.numero_humano),
+      erro,
+    });
+  }
 
   logEvent(input.store, "handoff.transferido", {
     wa_id_masked: maskPhone(input.waId),
@@ -211,6 +226,7 @@ export async function transferToHuman(
     user_text: input.userText ?? null,
     numero_humano_masked: maskPhone(input.config.handoff.numero_humano),
     dentro_horario: isWithinBusinessHours(input.config, agora),
+    notificacao_ok: notificacaoOk,
   });
 
   return {

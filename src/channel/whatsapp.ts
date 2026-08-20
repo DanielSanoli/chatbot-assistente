@@ -110,7 +110,12 @@ export function createWhatsappChannel(deps: WhatsappChannelDeps) {
     error: () => undefined,
   };
 
-  async function sendText(waId: string, texto: string): Promise<void> {
+  async function sendText(
+    waId: string,
+    texto: string,
+    options?: { destino?: "paciente" | "humano" },
+  ): Promise<void> {
+    const destino = options?.destino ?? "paciente";
     const url = `${graphBase}/${deps.phoneNumberId}/messages`;
     const body = {
       messaging_product: "whatsapp",
@@ -179,6 +184,7 @@ export function createWhatsappChannel(deps: WhatsappChannelDeps) {
           wa_id_masked: maskPhone(waId),
           status,
           tentativas: attempt,
+          destino,
         });
         throw lastError;
       }

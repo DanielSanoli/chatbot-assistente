@@ -425,3 +425,69 @@ describe("resumo humano", () => {
     expect(resumo).toMatch(/O que o cliente queria:/);
   });
 });
+
+describe("notificação da recepção não aborta a transferência", () => {
+  it("notifyHuman rejeitando ainda silencia o paciente e registra a falha observável", async () => {
+    const { store, config } = setup();
+    const waId = "5511987654321";
+    const agora = DateTime.fromISO("2026-07-28T12:00:00", { zone: TZ });
+
+    const result = await transferToHuman({
+      store,
+      config,
+      waId,
+      motivo: "gatilho_explicito:atendente",
+      intencao: "quero falar com atendente",
+      userText: "quero falar com atendente",
+      agora,
+      notifyHuman: async () => {
+        throw new Error("Graph API 400: (#131047) Message failed to send because more than 24 hours have passed");
+      },
+    });
+
+    expect(result.estado).toBe("EM_HUMANO");
+    expect(result.clientMessage).toBe(config.handoff.mensagem);
+    expect(getConversation(store, waId)?.estado).toBe("EM_HUMANO");
+
+    const transferidos = eventsOfType(store, "handoff.transferido");
+    expect(transferidos).toHaveLength(1);
+    expect(transferidos[0]?.notificacao_ok).toBe(false);
+
+    const falhas = eventsOfType(store, "handoff.notificacao_falhou");
+    expect(falhas).toHaveLength(1);
+    expect(falhas[0]?.motivo).toBe("gatilho_explicito:atendente");
+    expect(String(falhas[0]?.erro)).toMatch(/Graph API 400/);
+    expect(String(falhas[0]?.wa_id_masked)).toBe(maskPhone(waId));
+    expect(String(falhas[0]?.numero_humano_masked)).toBe(
+      maskPhone(config.handoff.numero_humano),
+    );
+
+    const serialized = JSON.stringify(falhas[0]);
+    expect(serialized).not.toContain(waId);
+    expect(serialized).not.toContain(config.handoff.numero_humano.replace(/\D/g, ""));
+    expect(serialized).not.toContain("quero falar com atendente");
+  });
+
+  it("notifyHuman bem-sucedido grava notificacao_ok true e não gera falha", async () => {
+    const { store, config } = setup();
+    const waId = "551100000201";
+    let called = 0;
+
+    await transferToHuman({
+      store,
+      config,
+      waId,
+      motivo: "urgencia_clinica",
+      agora: DateTime.fromISO("2026-07-28T12:00:00", { zone: TZ }),
+      notifyHuman: async () => {
+        called += 1;
+      },
+    });
+
+    expect(called).toBe(1);
+    const transferidos = eventsOfType(store, "handoff.transferido");
+    expect(transferidos).toHaveLength(1);
+    expect(transferidos[0]?.notificacao_ok).toBe(true);
+    expect(eventsOfType(store, "handoff.notificacao_falhou")).toHaveLength(0);
+  });
+});

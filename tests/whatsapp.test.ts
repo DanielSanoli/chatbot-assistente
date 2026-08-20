@@ -557,6 +557,23 @@ describe("privacidade e persistência do canal", () => {
       .all("whatsapp.send_failed") as Array<{ payload_json: string }>;
     expect(falhas).toHaveLength(1);
     expect(JSON.parse(falhas[0]!.payload_json).status).toBe(400);
+    expect(JSON.parse(falhas[0]!.payload_json).destino).toBe("paciente");
+    store.close();
+  });
+
+  it("falha de envio para a recepção marca destino humano", async () => {
+    const store = tempStore();
+    const fetchFn = vi.fn(async () => new Response("window closed", { status: 400 }));
+    const channel = canal(store, fetchFn as never);
+
+    await expect(
+      channel.sendText("5511977776666", "resumo", { destino: "humano" }),
+    ).rejects.toThrow();
+
+    const falhas = store.db
+      .prepare(`SELECT payload_json FROM events WHERE tipo = ?`)
+      .all("whatsapp.send_failed") as Array<{ payload_json: string }>;
+    expect(JSON.parse(falhas[0]!.payload_json).destino).toBe("humano");
     store.close();
   });
 });

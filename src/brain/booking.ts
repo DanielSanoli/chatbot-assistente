@@ -650,14 +650,3 @@ export async function confirmarAgendamento(
     mensagem_cliente: mensagem,
   };
 }
-
-/** @deprecated use transferToHuman — mantido só para compat de imports. */
-export function markHandoffState(ctx: BookingContext, motivo: string): void {
-  const conv = getConversation(ctx.store, ctx.waId);
-  const agora = nowTz(ctx);
-  setConversationState(ctx.store, ctx.waId, "EM_HUMANO", {
-    ...(conv?.estado_payload ?? {}),
-    motivoHandoff: motivo,
-    emHumanoDesde: agora.toISO() ?? agora.toString(),
-  });
-}

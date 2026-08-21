@@ -10,9 +10,24 @@ export type HistoryMessage = {
 const IDLE_HOURS = 6;
 const WINDOW_SIZE = 20;
 
+/**
+ * `messages.timestamp` já existiu em dois formatos: ISO com Z (entrada) e
+ * `datetime('now')` do SQLite ("YYYY-MM-DD HH:MM:SS", UTC sem marcador).
+ * Date.parse trata a segunda forma como hora local e subestima o idle pelo
+ * offset — em America/Sao_Paulo, 6h viram 9h. Sem marcador, é UTC.
+ */
+function parseTimestampUtc(value: string): number {
+  const trimmed = value.trim();
+  if (/[zZ]$/.test(trimmed) || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    return Date.parse(trimmed);
+  }
+  const iso = (trimmed.includes("T") ? trimmed : trimmed.replace(" ", "T")) + "Z";
+  return Date.parse(iso);
+}
+
 function hoursBetween(isoA: string, isoB: string): number {
-  const a = Date.parse(isoA);
-  const b = Date.parse(isoB);
+  const a = parseTimestampUtc(isoA);
+  const b = parseTimestampUtc(isoB);
   if (Number.isNaN(a) || Number.isNaN(b)) return 0;
   return Math.abs(b - a) / (1000 * 60 * 60);
 }

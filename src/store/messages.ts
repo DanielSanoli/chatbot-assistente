@@ -47,7 +47,7 @@ export function tryInsertMessage(
     store.db
       .prepare(
         `INSERT INTO messages (conversation_id, direcao, texto, timestamp, wa_message_id)
-         VALUES (?, ?, ?, COALESCE(?, datetime('now')), ?)`,
+         VALUES (?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%SZ','now')), ?)`,
       )
       .run(
         input.conversationId,

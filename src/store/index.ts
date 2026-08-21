@@ -48,6 +48,7 @@ export {
   markAppointmentRescheduled,
   deletePastAppointments,
   purgeAppointmentsBefore,
+  SlotCollisionError,
   APPOINTMENT_STATUSES,
   type Appointment,
   type AppointmentStatus,

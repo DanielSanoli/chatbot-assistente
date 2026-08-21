@@ -210,6 +210,37 @@ export function createWhatsappChannel(deps: WhatsappChannelDeps) {
 
   const onTextMessage = deps.onTextMessage ?? defaultOnTextMessage;
 
+  /**
+   * Serializa turnos do mesmo wa_id. Dois POSTs com ids diferentes passam no
+   * UNIQUE de wa_message_id e, sem isto, confirmam o mesmo slot em paralelo.
+   * Contatos distintos continuam em paralelo — a chave do Map é o wa_id.
+   */
+  const inflightByWaId = new Map<string, Promise<void>>();
+
+  function enqueueIncoming(message: IncomingMessage): Promise<void> {
+    const waId = message.from ?? "";
+    const previous = inflightByWaId.get(waId) ?? Promise.resolve();
+    const next = previous
+      .catch((err: unknown) => {
+        log.error(
+          {
+            wa_id: maskPhone(waId),
+            err: err instanceof Error ? err.message : String(err),
+          },
+          "whatsapp wa_id chain error",
+        );
+      })
+      .then(() => processIncomingMessage(message));
+
+    const tracked = next.finally(() => {
+      if (inflightByWaId.get(waId) === tracked) {
+        inflightByWaId.delete(waId);
+      }
+    });
+    inflightByWaId.set(waId, tracked);
+    return tracked;
+  }
+
   async function processIncomingMessage(message: IncomingMessage): Promise<void> {
     const waId = message.from;
     const waMessageId = message.id;
@@ -310,29 +341,31 @@ export function createWhatsappChannel(deps: WhatsappChannelDeps) {
       return;
     }
 
+    const tasks: Promise<void>[] = [];
     for (const entry of payload.entry ?? []) {
       for (const change of entry.changes ?? []) {
         for (const message of change.value?.messages ?? []) {
-          try {
-            await processIncomingMessage(message);
-          } catch (err) {
-            log.error(
-              {
-                wa_id: maskPhone(message.from ?? ""),
-                wa_message_id: message.id,
-                err: err instanceof Error ? err.message : String(err),
-              },
-              "whatsapp process message failed",
-            );
-            logEvent(deps.store, "whatsapp.process_error", {
-              wa_id_masked: maskPhone(message.from ?? ""),
-              wa_message_id: message.id ?? null,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
+          tasks.push(
+            enqueueIncoming(message).catch((err: unknown) => {
+              log.error(
+                {
+                  wa_id: maskPhone(message.from ?? ""),
+                  wa_message_id: message.id,
+                  err: err instanceof Error ? err.message : String(err),
+                },
+                "whatsapp process message failed",
+              );
+              logEvent(deps.store, "whatsapp.process_error", {
+                wa_id_masked: maskPhone(message.from ?? ""),
+                wa_message_id: message.id ?? null,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }),
+          );
         }
       }
     }
+    await Promise.all(tasks);
   }
 
   function registerRawBodyParser(app: FastifyInstance): void {

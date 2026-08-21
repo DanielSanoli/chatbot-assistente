@@ -40,4 +40,25 @@ describe("store migration", () => {
 
     store.close();
   });
+
+  it("cria índice único parcial de slot CONFIRMADO", () => {
+    const dir = mkdtempSync(join(tmpdir(), "chatbot-db-"));
+    dirs.push(dir);
+    const store = openStore(join(dir, "test.db"));
+
+    const index = store.db
+      .prepare(
+        `SELECT name, sql FROM sqlite_master
+          WHERE type = 'index' AND name = 'idx_appointments_slot_confirmado'`,
+      )
+      .get() as { name: string; sql: string } | undefined;
+
+    expect(index?.name).toBe("idx_appointments_slot_confirmado");
+    expect(index?.sql).toMatch(/UNIQUE/i);
+    expect(index?.sql).toMatch(/calendario_id/i);
+    expect(index?.sql).toMatch(/inicio/i);
+    expect(index?.sql).toMatch(/CONFIRMADO/);
+
+    store.close();
+  });
 });

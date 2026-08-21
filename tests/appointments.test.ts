@@ -21,7 +21,9 @@ import {
   getConversation,
   insertAppointment,
   listActiveAppointments,
+  markAppointmentCancelled,
   openStore,
+  SlotCollisionError,
   type Appointment,
   type Store,
 } from "../src/store/index.js";
@@ -467,5 +469,44 @@ describe("agendamento e privacidade", () => {
       .prepare(`SELECT COUNT(*) as n FROM appointments`)
       .get() as { n: number };
     expect(total.n).toBe(1);
+  });
+});
+
+describe("índice único do slot CONFIRMADO", () => {
+  it("INSERT duplicado no mesmo (calendario_id, inicio) sinaliza colisão", () => {
+    const { store } = setup();
+    const inicio = DateTime.fromISO("2026-08-03T10:00:00", {
+      zone: TZ,
+    });
+    seedAgendamento(store, "5511777000040", inicio, { eventId: "evt-a" });
+
+    expect(() =>
+      seedAgendamento(store, "5511777000041", inicio, { eventId: "evt-b" }),
+    ).toThrow(SlotCollisionError);
+  });
+
+  it("cancelar libera o slot para um novo INSERT", () => {
+    const { store } = setup();
+    const inicio = DateTime.fromISO("2026-08-03T10:00:00", {
+      zone: TZ,
+    });
+    const primeiro = seedAgendamento(store, "5511777000042", inicio, {
+      eventId: "evt-old",
+    });
+    markAppointmentCancelled(store, primeiro.id, "paciente pediu");
+
+    const segundo = seedAgendamento(store, "5511777000043", inicio, {
+      eventId: "evt-new",
+    });
+    expect(segundo.status).toBe("CONFIRMADO");
+    expect(segundo.eventId).toBe("evt-new");
+
+    const confirmados = store.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM appointments
+          WHERE calendario_id = ? AND inicio = ? AND status = 'CONFIRMADO'`,
+      )
+      .get(primeiro.calendarioId, primeiro.inicio) as { n: number };
+    expect(confirmados.n).toBe(1);
   });
 });

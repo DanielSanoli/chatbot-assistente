@@ -7,6 +7,7 @@ import {
   getAppointment,
   insertAppointment,
   markAppointmentRescheduled,
+  SlotCollisionError,
 } from "../store/appointments.js";
 import {
   ensureConversation,
@@ -367,6 +368,30 @@ export async function proporHorarios(
   };
 }
 
+async function responderSlotTomado(
+  ctx: BookingContext,
+  slot: ProposedSlot,
+): Promise<Record<string, unknown>> {
+  const preferencia = getConversation(ctx.store, ctx.waId)?.estado_payload
+    .preferencia;
+  const reproposta = await proporHorarios(ctx, {
+    servicoId: slot.servicoId,
+    preferencia,
+  });
+  logEvent(ctx.store, "booking.slot_tomado", {
+    wa_id_masked: maskPhone(ctx.waId),
+    inicio: slot.inicio,
+  });
+  return {
+    ok: false,
+    motivo: "slot_tomado",
+    agendado: false,
+    mensagem:
+      "Esse horário acabou de ser ocupado. Seja honesto com o cliente e ofereça os novos horários — não crie evento em cima.",
+    nova_proposta: reproposta,
+  };
+}
+
 export async function confirmarAgendamento(
   ctx: BookingContext,
   input: { slotEscolhido: string; nomeCompleto: string },
@@ -516,22 +541,7 @@ export async function confirmarAgendamento(
 
   const free = await slotStillFree(ctx, slot);
   if (!free) {
-    const reproposta = await proporHorarios(ctx, {
-      servicoId: slot.servicoId,
-      preferencia: conv.estado_payload.preferencia,
-    });
-    logEvent(ctx.store, "booking.slot_tomado", {
-      wa_id_masked: maskPhone(ctx.waId),
-      inicio: slot.inicio,
-    });
-    return {
-      ok: false,
-      motivo: "slot_tomado",
-      agendado: false,
-      mensagem:
-        "Esse horário acabou de ser ocupado. Seja honesto com o cliente e ofereça os novos horários — não crie evento em cima.",
-      nova_proposta: reproposta,
-    };
+    return responderSlotTomado(ctx, slot);
   }
 
   const servico = ctx.config.servicos.find((s) => s.id === slot.servicoId);
@@ -566,19 +576,39 @@ export async function confirmarAgendamento(
     ? getAppointment(ctx.store, remarcandoId)
     : null;
 
-  const appointment = insertAppointment(ctx.store, {
-    waId: ctx.waId,
-    servicoId: slot.servicoId,
-    servicoNome: servico.nome,
-    profissionalId: slot.profissionalId,
-    profissionalNome: slot.profissionalNome,
-    calendarioId: slot.calendarioId,
-    eventId: created.id,
-    inicio: slot.inicio,
-    fim: fimFinal.toISO() ?? slot.fim,
-    nome,
-    remarcadoDeId: anterior?.id ?? null,
-  });
+  let appointment;
+  try {
+    appointment = insertAppointment(ctx.store, {
+      waId: ctx.waId,
+      servicoId: slot.servicoId,
+      servicoNome: servico.nome,
+      profissionalId: slot.profissionalId,
+      profissionalNome: slot.profissionalNome,
+      calendarioId: slot.calendarioId,
+      eventId: created.id,
+      inicio: slot.inicio,
+      fim: fimFinal.toISO() ?? slot.fim,
+      nome,
+      remarcadoDeId: anterior?.id ?? null,
+    });
+  } catch (err) {
+    if (!(err instanceof SlotCollisionError)) throw err;
+    try {
+      await ctx.calendar.deleteEvent({
+        calendarId: slot.calendarioId,
+        eventId: created.id,
+      });
+    } catch (delErr) {
+      logEvent(ctx.store, "booking.evento_orfao", {
+        wa_id_masked: maskPhone(ctx.waId),
+        event_id: created.id,
+        calendario_id: slot.calendarioId,
+        inicio: slot.inicio,
+        erro: delErr instanceof Error ? delErr.message : String(delErr),
+      });
+    }
+    return responderSlotTomado(ctx, slot);
+  }
 
   // Remarcação: o evento novo já existe, então agora dá para soltar o antigo.
   // Nesta ordem de propósito — se a remoção falhar, o paciente fica com horário

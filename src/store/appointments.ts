@@ -45,6 +45,30 @@ export type NewAppointment = Omit<
   remarcadoDeId?: number | null;
 };
 
+/** Dois CONFIRMADO no mesmo (calendario_id, inicio). Não é erro genérico. */
+export class SlotCollisionError extends Error {
+  readonly code = "SLOT_COLLISION" as const;
+
+  constructor(calendarioId: string, inicio: string) {
+    super(
+      `Horário já confirmado neste calendário (${calendarioId} @ ${inicio})`,
+    );
+    this.name = "SlotCollisionError";
+  }
+}
+
+function isSqliteUniqueConstraint(err: unknown): boolean {
+  const code =
+    err && typeof err === "object" && "code" in err
+      ? String((err as { code: unknown }).code)
+      : "";
+  return (
+    code === "SQLITE_CONSTRAINT_UNIQUE" ||
+    code === "SQLITE_CONSTRAINT" ||
+    (err instanceof Error && /UNIQUE constraint failed/i.test(err.message))
+  );
+}
+
 type AppointmentDbRow = {
   id: number;
   wa_id: string;
@@ -98,32 +122,40 @@ export function insertAppointment(
   store: Store,
   input: NewAppointment,
 ): Appointment {
-  const result = store.db
-    .prepare(
-      `INSERT INTO appointments
+  try {
+    const result = store.db
+      .prepare(
+        `INSERT INTO appointments
          (wa_id, servico_id, servico_nome, profissional_id, profissional_nome,
           calendario_id, event_id, inicio, fim, nome, status, remarcado_de_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMADO', ?)`,
-    )
-    .run(
-      input.waId,
-      input.servicoId,
-      input.servicoNome,
-      input.profissionalId,
-      input.profissionalNome,
-      input.calendarioId,
-      input.eventId,
-      input.inicio,
-      input.fim,
-      input.nome,
-      input.remarcadoDeId ?? null,
-    );
+      )
+      .run(
+        input.waId,
+        input.servicoId,
+        input.servicoNome,
+        input.profissionalId,
+        input.profissionalNome,
+        input.calendarioId,
+        input.eventId,
+        input.inicio,
+        input.fim,
+        input.nome,
+        input.remarcadoDeId ?? null,
+      );
 
-  const created = getAppointment(store, Number(result.lastInsertRowid));
-  if (!created) {
-    throw new Error("Falha ao gravar agendamento");
+    const created = getAppointment(store, Number(result.lastInsertRowid));
+    if (!created) {
+      throw new Error("Falha ao gravar agendamento");
+    }
+    return created;
+  } catch (err) {
+    if (err instanceof SlotCollisionError) throw err;
+    if (isSqliteUniqueConstraint(err)) {
+      throw new SlotCollisionError(input.calendarioId, input.inicio);
+    }
+    throw err;
   }
-  return created;
 }
 
 export function getAppointment(store: Store, id: number): Appointment | null {

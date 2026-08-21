@@ -90,6 +90,18 @@ CREATE INDEX IF NOT EXISTS idx_demandas_status ON demandas(status, criado_em);
 CREATE INDEX IF NOT EXISTS idx_events_criado_em ON events(criado_em);
 `;
 
+/**
+ * Um horário CONFIRMADO por calendário. Cancelado/remarcado não ocupa o slot —
+ * senão o paciente não consegue remarcar para o mesmo instante nem a clínica
+ * reaproveita a vaga. Índice parcial: o UNIQUE só vale enquanto status =
+ * CONFIRMADO. Idempotente (IF NOT EXISTS).
+ */
+const MIGRATION_V4 = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_slot_confirmado
+  ON appointments (calendario_id, inicio)
+  WHERE status = 'CONFIRMADO';
+`;
+
 function migrateConversations(db: Database.Database): void {
   const cols = db
     .prepare(`PRAGMA table_info(conversations)`)
@@ -128,6 +140,7 @@ export function openStore(sqlitePath: string): Store {
   db.exec(MIGRATION_V1);
   db.exec(MIGRATION_V2);
   db.exec(MIGRATION_V3);
+  db.exec(MIGRATION_V4);
   migrateConversations(db);
 
   return {

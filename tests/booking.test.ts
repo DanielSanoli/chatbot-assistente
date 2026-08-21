@@ -51,6 +51,7 @@ function setup() {
 
 type FakeCalendar = CalendarClient & {
   created: Array<{
+    id: string;
     title: string;
     description?: string;
     inicio: DateTime;
@@ -60,10 +61,12 @@ type FakeCalendar = CalendarClient & {
   busyById: Record<string, BusyPeriod[]>;
   queryBusyCalls: number;
   deleted: Array<{ calendarId: string; eventId: string }>;
+  remainingEventIds: () => string[];
 };
 
 function fakeCalendar(
   busyById: Record<string, BusyPeriod[]> = {},
+  options: { holdCreate?: () => Promise<void>; falharDelete?: boolean } = {},
 ): FakeCalendar {
   const created: FakeCalendar["created"] = [];
   const deleted: FakeCalendar["deleted"] = [];
@@ -74,6 +77,10 @@ function fakeCalendar(
     created,
     deleted,
     queryBusyCalls: 0,
+    remainingEventIds() {
+      const gone = new Set(deleted.map((d) => d.eventId));
+      return created.filter((e) => !gone.has(e.id)).map((e) => e.id);
+    },
     async queryBusy({ calendarIds }) {
       calendar.queryBusyCalls += 1;
       const map = new Map<string, BusyPeriod[]>();
@@ -83,16 +90,22 @@ function fakeCalendar(
       return map;
     },
     async createEvent(input) {
+      if (options.holdCreate) await options.holdCreate();
+      const id = `evt-${created.length + 1}`;
       created.push({
+        id,
         title: input.title,
         description: input.description,
         inicio: input.inicio,
         fim: input.fim,
         calendarId: input.calendarId,
       });
-      return { id: `evt-${created.length}` };
+      return { id };
     },
     async deleteEvent({ calendarId, eventId }) {
+      if (options.falharDelete) {
+        throw new Error("Google fora do ar");
+      }
       deleted.push({ calendarId, eventId });
     },
   };
@@ -274,6 +287,53 @@ describe("agendamento com confirmação", () => {
     }
 
     expect(calendar.created).toHaveLength(0);
+  });
+
+  it("dois confirmarAgendamento concorrentes no mesmo slot: 1 CONFIRMADO e 1 evento", async () => {
+    const { store, config } = setup();
+    let entered = 0;
+    let release!: () => void;
+    const bothInCreate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calendar = fakeCalendar({}, {
+      holdCreate: async () => {
+        entered += 1;
+        if (entered >= 2) release();
+        await bothInCreate;
+      },
+    });
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+    const waId = "5511888000007";
+
+    await proporHorarios(ctx(store, config, calendar, waId, agora), {
+      servicoId: "limpeza",
+    });
+
+    const [a, b] = await Promise.all([
+      confirmarAgendamento(
+        ctx(store, config, calendar, waId, agora.plus({ minutes: 1 })),
+        { slotEscolhido: "1", nomeCompleto: "Maria Silva" },
+      ),
+      confirmarAgendamento(
+        ctx(store, config, calendar, waId, agora.plus({ minutes: 1 })),
+        { slotEscolhido: "1", nomeCompleto: "Maria Silva" },
+      ),
+    ]);
+
+    const results = [a, b];
+    expect(results.filter((r) => r.agendado === true)).toHaveLength(1);
+    expect(results.filter((r) => r.motivo === "slot_tomado")).toHaveLength(1);
+
+    const confirmados = store.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM appointments WHERE status = 'CONFIRMADO'`,
+      )
+      .get() as { n: number };
+    expect(confirmados.n).toBe(1);
+    expect(calendar.remainingEventIds()).toHaveLength(1);
+    expect(calendar.created).toHaveLength(2);
+    expect(calendar.deleted).toHaveLength(1);
   });
 });
 

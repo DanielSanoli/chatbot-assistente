@@ -39,7 +39,11 @@ function sign(body: string | Buffer, secret = APP_SECRET): string {
   return `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
 }
 
-function textPayload(waMessageId: string, text = "olá"): object {
+function textPayload(
+  waMessageId: string,
+  text = "olá",
+  from = "5511999998888",
+): object {
   return {
     object: "whatsapp_business_account",
     entry: [
@@ -49,7 +53,7 @@ function textPayload(waMessageId: string, text = "olá"): object {
             value: {
               messages: [
                 {
-                  from: "5511999998888",
+                  from,
                   id: waMessageId,
                   timestamp: "1700000000",
                   type: "text",
@@ -62,6 +66,10 @@ function textPayload(waMessageId: string, text = "olá"): object {
       },
     ],
   };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function mediaPayload(waMessageId: string, type = "image"): object {
@@ -274,6 +282,109 @@ describe("processamento inbound", () => {
 
     expect(countMessagesByWaMessageId(store, "wamid.dup")).toBe(1);
     expect(onText).toHaveBeenCalledTimes(1);
+    store.close();
+  });
+
+  it("dois turnos do mesmo wa_id executam em sequência (concorrência máxima 1)", async () => {
+    const store = tempStore();
+    let current = 0;
+    let max = 0;
+    const onText = vi.fn(async () => {
+      current += 1;
+      max = Math.max(max, current);
+      await sleep(40);
+      current -= 1;
+    });
+    const channel = createWhatsappChannel({
+      store,
+      phoneNumberId: "phone",
+      accessToken: "token",
+      verifyToken: VERIFY_TOKEN,
+      appSecret: APP_SECRET,
+      fetchFn: vi.fn(async () =>
+        new Response(JSON.stringify({ messages: [{ id: "out" }] }), {
+          status: 200,
+        }),
+      ),
+      onTextMessage: onText,
+    });
+
+    await Promise.all([
+      channel.processWebhookPayload(textPayload("wamid.seq.1", "1")),
+      channel.processWebhookPayload(textPayload("wamid.seq.2", "1")),
+    ]);
+
+    expect(max).toBe(1);
+    expect(onText).toHaveBeenCalledTimes(2);
+    store.close();
+  });
+
+  it("turnos de wa_id diferentes executam em paralelo", async () => {
+    const store = tempStore();
+    let current = 0;
+    let max = 0;
+    const onText = vi.fn(async () => {
+      current += 1;
+      max = Math.max(max, current);
+      await sleep(40);
+      current -= 1;
+    });
+    const channel = createWhatsappChannel({
+      store,
+      phoneNumberId: "phone",
+      accessToken: "token",
+      verifyToken: VERIFY_TOKEN,
+      appSecret: APP_SECRET,
+      fetchFn: vi.fn(async () =>
+        new Response(JSON.stringify({ messages: [{ id: "out" }] }), {
+          status: 200,
+        }),
+      ),
+      onTextMessage: onText,
+    });
+
+    await Promise.all([
+      channel.processWebhookPayload(
+        textPayload("wamid.par.1", "oi", "5511111111111"),
+      ),
+      channel.processWebhookPayload(
+        textPayload("wamid.par.2", "oi", "5511222222222"),
+      ),
+    ]);
+
+    expect(max).toBe(2);
+    expect(onText).toHaveBeenCalledTimes(2);
+    store.close();
+  });
+
+  it("exceção no turno N não impede o turno N+1 do mesmo wa_id", async () => {
+    const store = tempStore();
+    const seen: string[] = [];
+    const onText = vi.fn(async ({ text }: { text: string }) => {
+      seen.push(text);
+      if (text === "boom") throw new Error("boom");
+    });
+    const channel = createWhatsappChannel({
+      store,
+      phoneNumberId: "phone",
+      accessToken: "token",
+      verifyToken: VERIFY_TOKEN,
+      appSecret: APP_SECRET,
+      fetchFn: vi.fn(async () =>
+        new Response(JSON.stringify({ messages: [{ id: "out" }] }), {
+          status: 200,
+        }),
+      ),
+      onTextMessage: onText,
+    });
+
+    await Promise.all([
+      channel.processWebhookPayload(textPayload("wamid.err.1", "boom")),
+      channel.processWebhookPayload(textPayload("wamid.err.2", "ok")),
+    ]);
+
+    expect(seen).toEqual(["boom", "ok"]);
+    expect(onText).toHaveBeenCalledTimes(2);
     store.close();
   });
 

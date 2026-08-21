@@ -18,6 +18,7 @@ import { purgeOldConversations } from "../src/jobs/purge.js";
 import type { BusyPeriod, CalendarClient } from "../src/calendar/google.js";
 import { ConfigService } from "../src/config/index.js";
 import {
+  getAppointment,
   getConversation,
   insertAppointment,
   listActiveAppointments,
@@ -508,5 +509,155 @@ describe("índice único do slot CONFIRMADO", () => {
       )
       .get(primeiro.calendarioId, primeiro.inicio) as { n: number };
     expect(confirmados.n).toBe(1);
+  });
+});
+
+describe("isolamento entre contatos", () => {
+  const WA_A = "5511777000100";
+  const WA_B = "5511777000101";
+
+  function seedDeA(
+    store: Store,
+    agora: DateTime,
+    overrides: Partial<Appointment> = {},
+  ): Appointment {
+    return seedAgendamento(store, WA_A, agora.plus({ days: 4 }), {
+      eventId: "evt-alfa",
+      nome: "Alfa Nogueira",
+      servicoId: "clareamento",
+      servicoNome: "Clareamento dental",
+      ...overrides,
+    });
+  }
+
+  function serializado(value: unknown): string {
+    return JSON.stringify(value);
+  }
+
+  it("B não cancela o agendamento de A nem passando o id certo", async () => {
+    const { store, config } = setup();
+    const calendar = fakeCalendar();
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+    const deA = seedDeA(store, agora);
+
+    const result = await cancelarAgendamento(
+      ctx(store, config, calendar, WA_B, agora, "cancela o 1"),
+      { agendamentoId: deA.id, confirmado: true },
+    );
+
+    expect(result.motivo).toBe("sem_agendamento");
+    expect(getAppointment(store, deA.id)?.status).toBe("CONFIRMADO");
+    expect(listActiveAppointments(store, WA_A, agora)).toHaveLength(1);
+    expect(calendar.deleted).toHaveLength(0);
+  });
+
+  it("B não inicia remarcação do agendamento de A nem passando o id certo", async () => {
+    const { store, config } = setup();
+    const calendar = fakeCalendar();
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+    const deA = seedDeA(store, agora);
+
+    const result = await remarcarAgendamento(
+      ctx(store, config, calendar, WA_B, agora, "quero remarcar"),
+      { agendamentoId: deA.id },
+    );
+
+    expect(result.motivo).toBe("sem_agendamento");
+    expect(getAppointment(store, deA.id)?.status).toBe("CONFIRMADO");
+    expect(listActiveAppointments(store, WA_A, agora)).toHaveLength(1);
+    expect(calendar.deleted).toHaveLength(0);
+    expect(calendar.created).toHaveLength(0);
+    expect(getConversation(store, WA_B)?.estado_payload.remarcandoId).not.toBe(
+      deA.id,
+    );
+  });
+
+  it("consultar no contexto de B não devolve dado do agendamento de A", () => {
+    const { store, config } = setup();
+    const calendar = fakeCalendar();
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+    const deA = seedAgendamento(store, WA_A, agora.plus({ days: 4 }), {
+      eventId: "evt-alfa",
+      nome: "Alfa Nogueira",
+      servicoId: "clareamento",
+      servicoNome: "Clareamento dental",
+    });
+
+    const consulta = consultarAgendamentos(
+      ctx(store, config, calendar, WA_B, agora),
+    );
+
+    expect(consulta.encontrados).toBe(0);
+    expect(consulta.agendamentos).toEqual([]);
+    const dump = serializado(consulta);
+    expect(dump).not.toContain(String(deA.id));
+    expect(dump).not.toContain(deA.inicio);
+    expect(dump).not.toContain(deA.nome);
+    expect(dump).not.toContain(deA.profissionalNome);
+    expect(dump).not.toContain(deA.servicoNome);
+  });
+
+  it("id inexistente, id de outro contato e id CANCELADO do próprio contato devolvem o mesmo motivo", async () => {
+    const { store, config } = setup();
+    const calendar = fakeCalendar();
+    const agora = DateTime.fromISO("2026-07-27T08:00:00", { zone: TZ });
+    const deA = seedDeA(store, agora);
+    const canceladoDeB = seedAgendamento(store, WA_B, agora.plus({ days: 5 }), {
+      eventId: "evt-bravo-morto",
+      nome: "Bravo Lima",
+    });
+    markAppointmentCancelled(store, canceladoDeB.id, "teste");
+
+    const idInexistente = deA.id + 50_000;
+    const ctxB = ctx(store, config, calendar, WA_B, agora);
+
+    const cancelInexistente = await cancelarAgendamento(ctxB, {
+      agendamentoId: idInexistente,
+      confirmado: true,
+    });
+    const cancelDeA = await cancelarAgendamento(ctxB, {
+      agendamentoId: deA.id,
+      confirmado: true,
+    });
+    const cancelProprioMorto = await cancelarAgendamento(ctxB, {
+      agendamentoId: canceladoDeB.id,
+      confirmado: true,
+    });
+
+    expect(cancelInexistente.motivo).toBe("sem_agendamento");
+    expect(cancelDeA.motivo).toBe(cancelInexistente.motivo);
+    expect(cancelProprioMorto.motivo).toBe(cancelInexistente.motivo);
+    expect(cancelDeA.mensagem).toBe(cancelInexistente.mensagem);
+    expect(cancelProprioMorto.mensagem).toBe(cancelInexistente.mensagem);
+
+    const remarcarInexistente = await remarcarAgendamento(ctxB, {
+      agendamentoId: idInexistente,
+    });
+    const remarcarDeA = await remarcarAgendamento(ctxB, {
+      agendamentoId: deA.id,
+    });
+    const remarcarProprioMorto = await remarcarAgendamento(ctxB, {
+      agendamentoId: canceladoDeB.id,
+    });
+
+    expect(remarcarInexistente.motivo).toBe("sem_agendamento");
+    expect(remarcarDeA.motivo).toBe(remarcarInexistente.motivo);
+    expect(remarcarProprioMorto.motivo).toBe(remarcarInexistente.motivo);
+    expect(remarcarDeA.mensagem).toBe(remarcarInexistente.mensagem);
+    expect(remarcarProprioMorto.mensagem).toBe(remarcarInexistente.mensagem);
+
+    const dump = [
+      serializado(cancelDeA),
+      serializado(cancelInexistente),
+      serializado(cancelProprioMorto),
+      serializado(remarcarDeA),
+      serializado(remarcarInexistente),
+      serializado(remarcarProprioMorto),
+    ].join("\n");
+    expect(dump).not.toContain("Alfa Nogueira");
+    expect(dump).not.toContain(deA.inicio);
+    expect(calendar.deleted).toHaveLength(0);
+    expect(calendar.created).toHaveLength(0);
+    expect(getAppointment(store, deA.id)?.status).toBe("CONFIRMADO");
   });
 });

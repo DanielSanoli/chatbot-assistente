@@ -10,10 +10,11 @@ import {
   marcarAvisoLgpdEntregue,
   transferToHuman,
 } from "./brain/index.js";
-import { openStore, logEvent, countEventsSince } from "./store/index.js";
+import { openStore, logEvent } from "./store/index.js";
 import { purgeFromConfig } from "./jobs/purge.js";
 import { maskPhone } from "./channel/mask.js";
 import { DateTime } from "luxon";
+import { registerHealthRoutes } from "./health.js";
 
 function loadDotEnv(filePath = ".env"): void {
   const absolute = resolve(filePath);
@@ -167,34 +168,14 @@ async function main(): Promise<void> {
   whatsapp.registerRoutes(app);
 
   /**
-   * `ok` responde "o processo está de pé". `degradado` responde a pergunta que
-   * o log de chat expôs: com a chave da Anthropic sem crédito, TODA mensagem
-   * vira handoff e o paciente fica mudo 12h — e nada disso aparece como erro.
-   * Falha de envio entra junto: o webhook já respondeu 200, ninguém reenvia.
-   * Falha de notificação da recepção: o paciente já está em EM_HUMANO e mudo;
-   * se isso some, a clínica atende no escuro.
+   * /health é o que o proxy consulta: processo de pé, sem dado de cliente.
+   * /health/detalhe é o que o monitor usa para saber se o bot está recebendo
+   * mensagem — e só existe se HEALTH_TOKEN estiver no ambiente.
    */
-  app.get("/health", async () => {
-    const desde = DateTime.utc().minus({ hours: 1 }).toFormat("yyyy-LL-dd HH:mm:ss");
-    const errosClaude = countEventsSince(store, ["brain.claude_error", "brain.error"], desde);
-    const falhasEnvio = countEventsSince(store, ["whatsapp.send_failed"], desde);
-    const falhasNotificacao = countEventsSince(
-      store,
-      ["handoff.notificacao_falhou"],
-      desde,
-    );
-
-    return {
-      ok: true,
-      degradado: errosClaude > 0 || falhasEnvio > 0 || falhasNotificacao > 0,
-      cliente: config.cliente.id,
-      timezone: config.cliente.timezone,
-      ultima_hora: {
-        erros_claude: errosClaude,
-        falhas_envio: falhasEnvio,
-        handoff_notificacao_falhou: falhasNotificacao,
-      },
-    };
+  registerHealthRoutes(app, {
+    store,
+    config,
+    healthToken: process.env.HEALTH_TOKEN,
   });
 
   // Expurgo LGPD: uma vez no boot e a cada 24h.

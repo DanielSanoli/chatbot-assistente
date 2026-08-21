@@ -10,7 +10,9 @@ import {
   detectUrgency,
   isMutedEmHumano,
   transferToHuman,
+  URGENCY_PATTERNS,
 } from "../src/brain/handoff.js";
+import { normalizeTerm } from "../src/brain/normalize.js";
 import { executeTool } from "../src/brain/tools.js";
 import type { CalendarClient } from "../src/calendar/google.js";
 import { CalendarUnavailable } from "../src/calendar/google.js";
@@ -96,12 +98,90 @@ function eventsOfType(store: Store, tipo: string) {
 }
 
 describe("detecção", () => {
+  /**
+   * Uma frase por padrão, na mesma ordem de URGENCY_PATTERNS. detectUrgency
+   * normaliza acento, então a frase pode trazer o acento que o paciente digitaria.
+   */
+  const FRASE_POR_PADRAO = [
+    "estou com muita dor",
+    "dor insuportável no siso",
+    "estou com dor no dente",
+    "sangramento na gengiva",
+    "a gengiva está sangrando",
+    "inchaço no rosto",
+    "rosto inchado",
+    "preciso de urgência",
+    "tenho uma emergência",
+    "socorro, o dente partiu",
+    "não aguento de dor",
+    "quebrou o dente",
+    "caiu o dente",
+  ];
+
   it("detecta urgência clínica", () => {
     expect(detectUrgency("estou com muita dor")).toBe(true);
     expect(detectUrgency("sangramento na gengiva")).toBe(true);
     expect(detectUrgency("inchaço no rosto")).toBe(true);
     expect(detectUrgency("rosto inchado")).toBe(true);
     expect(detectUrgency("quero limpeza")).toBe(false);
+  });
+
+  it("emergência (com e sem acento) transfere", () => {
+    expect(detectUrgency("emergência")).toBe(true);
+    expect(detectUrgency("emergencia")).toBe(true);
+    expect(detectUrgency("tenho uma emergência")).toBe(true);
+    expect(detectUrgency("tenho uma emergência no dente")).toBe(true);
+    expect(detectUrgency("estou com uma emergencia no dente")).toBe(true);
+  });
+
+  it("termos novos de paciente em dor disparam", () => {
+    expect(detectUrgency("socorro")).toBe(true);
+    expect(detectUrgency("não aguento de dor")).toBe(true);
+    expect(detectUrgency("nao aguento de dor")).toBe(true);
+    expect(detectUrgency("quebrou o dente")).toBe(true);
+    expect(detectUrgency("quebrei o dente")).toBe(true);
+    expect(detectUrgency("caiu o dente")).toBe(true);
+  });
+
+  it("cobre cada padrão da lista com pelo menos um caso", () => {
+    expect(FRASE_POR_PADRAO).toHaveLength(URGENCY_PATTERNS.length);
+
+    for (const [i, re] of URGENCY_PATTERNS.entries()) {
+      const frase = FRASE_POR_PADRAO[i]!;
+      expect(detectUrgency(frase), `detectUrgency(${JSON.stringify(frase)})`).toBe(
+        true,
+      );
+      const n = normalizeTerm(frase);
+      expect(
+        re.test(frase) || re.test(n),
+        `/${re.source}/ deveria casar com ${JSON.stringify(frase)}`,
+      ).toBe(true);
+    }
+  });
+
+  it("nenhum padrão contém palavra de idioma estrangeiro", () => {
+    const blob = URGENCY_PATTERNS.map((re) => re.source).join(" ");
+    expect(blob).not.toMatch(/\bemergenza\b/);
+    expect(blob).not.toMatch(/\burgenza\b/);
+    expect(blob).not.toMatch(/\bemergency\b/);
+    expect(blob).not.toMatch(/\bhelp\b/);
+    expect(blob).not.toMatch(/\bswelling\b/);
+    expect(blob).not.toMatch(/\bbleeding\b/);
+  });
+
+  it("não dispara em vizinhança sem urgência real; dúvida com a palavra emergência transfere", () => {
+    expect(detectUrgency("quero limpeza")).toBe(false);
+    expect(detectUrgency("quero marcar uma avaliação")).toBe(false);
+    expect(detectUrgency("quebrou o aparelho")).toBe(false);
+    expect(detectUrgency("caiu a ficha")).toBe(false);
+    expect(detectUrgency("não aguento mais esperar")).toBe(false);
+    expect(detectUrgency("o dente do siso")).toBe(false);
+    expect(detectUrgency("procedimento emergente")).toBe(false);
+
+    // "vocês atendem emergência aos domingos?" — transfere. A palavra é a
+    // mesma do pedido de socorro; melhor a recepção filtrar uma dúvida do
+    // que o bot propor horário para quem está com o dente partido.
+    expect(detectUrgency("vocês atendem emergência aos domingos?")).toBe(true);
   });
 
   it("detecta gatilho explícito", () => {

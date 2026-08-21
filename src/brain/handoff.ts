@@ -12,18 +12,25 @@ import {
 import { maskPhone } from "../channel/mask.js";
 import { normalizeTerm } from "./normalize.js";
 
+/**
+ * Padrões contra texto já passado por normalizeTerm (minúsculas, sem acento).
+ * Uma entrada sem acento cobre "emergência" e "emergencia". Não misturar
+ * idioma estrangeiro — "emergenza" não casa com o que o paciente escreve.
+ */
 export const URGENCY_PATTERNS: RegExp[] = [
   /\bmuita dor\b/i,
-  /\bdor (forte|intensa|insuportavel|insuportável)\b/i,
+  /\bdor (forte|intensa|insuportavel)\b/i,
   /\bestou com (muita )?dor\b/i,
   /\bsangramento\b/i,
   /\bsangrando\b/i,
   /\binchaco\b/i,
-  /\binchaço\b/i,
   /\binchado\b/i,
   /\burgencia\b/i,
-  /\burgência\b/i,
-  /\bemergenza\b/i,
+  /\bemergencia\b/i,
+  /\bsocorro\b/i,
+  /\bnao aguento de dor\b/i,
+  /\bquebr(ou|ei) o dente\b/i,
+  /\bcaiu o dente\b/i,
 ];
 
 export type HandoffTransferInput = {
